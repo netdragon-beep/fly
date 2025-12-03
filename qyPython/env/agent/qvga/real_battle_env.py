@@ -195,6 +195,14 @@ class RealBattleEnvironment:
                 'Alt': platform.get('altitude', 0),
                 'Speed': platform.get('speed', 0),
                 'Heading': platform.get('heading', 0),
+                # 奖励计算需要的额外字段
+                'longitude': platform.get('longitude', 0),
+                'latitude': platform.get('latitude', 0),
+                'altitude': platform.get('altitude', 0),
+                'target_name': platform.get('name', ''),
+                'platform_entity_type': platform.get('type', '无人机'),
+                'platform_entity_side': 'blue',
+                'is_fired_num': 0,
             })
 
         broken_list = []

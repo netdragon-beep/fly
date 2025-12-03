@@ -14,7 +14,8 @@ class PolicyNetwork(nn.Module):
     策略网络 - 将态势映射为动作
 
     Input: state_features (230维)
-    Output: action_logits (40维 = 10单位 × 4动作维度)
+    Output: action_logits (40维 = 5单位 × 8动作维度)
+        - 每个单位8维: [dx, dy, dz, speed, target_idx, fire_prob, reserve1, reserve2]
     """
 
     def __init__(self, state_dim: int = 230, action_dim: int = 40,
