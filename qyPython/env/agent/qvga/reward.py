@@ -2,12 +2,29 @@
 奖励函数模块
 
 设计原则:
-1. 有人机价值 > 无人机价值
+1. 有人机价值 > 无人机价值（有人机是胜负关键）
 2. 击毁敌方 > 保护己方（进攻性策略）
 3. 导弹精准使用，避免浪费
 4. 坠机惩罚，避免自杀式策略
+5. 战术配合奖励，鼓励协同作战
+
+数据结构说明（基于仿真环境）:
+- platform_list: 己方平台列表
+  - type: "有人机" / "无人机"
+  - name: 平台名称（如"红有人机1"）
+  - weapons[].quantity: 剩余导弹数
+  - altitude: 高度（米）
+  - longitude/latitude: 经纬度
+- track_list: 探测到的目标列表
+  - target_id: 目标ID
+  - target_name: 目标名称
+  - platform_entity_type: "有人机" / "无人机" / "导弹"
+  - platform_entity_side: "red" / "blue"
+  - is_fired_num: 该目标被己方导弹攻击数量
+- broken_list: 已损失单位名称列表（字符串列表）
 """
 import numpy as np
+import math
 from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 
@@ -17,43 +34,72 @@ class RewardConfig:
     """奖励函数配置"""
 
     # === 击毁奖励 ===
-    kill_enemy_manned: float = 30.0      # 击毁敌方有人机
-    kill_enemy_uav: float = 10.0         # 击毁敌方无人机
+    kill_enemy_manned: float = 50.0      # 击毁敌方有人机（核心目标）
+    kill_enemy_uav: float = 15.0         # 击毁敌方无人机
 
     # === 损失惩罚 ===
-    lose_own_manned: float = -25.0       # 己方有人机被击落
-    lose_own_uav: float = -8.0           # 己方无人机被击落
+    lose_own_manned: float = -40.0       # 己方有人机被击落（严重惩罚）
+    lose_own_uav: float = -10.0          # 己方无人机被击落
 
     # === 导弹相关 ===
-    missile_fired: float = -1.0          # 发射导弹成本
-    missile_hit: float = 5.0             # 导弹命中额外奖励
-    missile_miss: float = -2.0           # 导弹未命中惩罚
+    missile_fired: float = -0.5          # 发射导弹成本（轻微成本）
+    missile_hit: float = 8.0             # 导弹命中额外奖励
+    missile_miss: float = -3.0           # 导弹未命中惩罚（浪费弹药）
+    missile_wasted: float = -5.0         # 导弹被拦截/失效
 
     # === 坠机惩罚 ===
-    crash_penalty: float = -10.0         # 非战斗坠机惩罚
+    crash_penalty: float = -15.0         # 非战斗坠机惩罚
+    low_altitude_warning: float = -0.5   # 低高度警告（每步）
 
     # === 胜负奖励 ===
-    victory_bonus: float = 50.0          # 胜利奖励
-    defeat_penalty: float = -30.0        # 失败惩罚
+    victory_bonus: float = 100.0         # 胜利奖励（大幅提升）
+    defeat_penalty: float = -50.0        # 失败惩罚
 
-    # === 辅助奖励（可选）===
-    protect_manned_bonus: float = 0.5    # 每步有人机存活奖励
-    damage_dealt: float = 0.1            # 造成伤害奖励（每点HP）
-    survival_bonus: float = 0.01         # 存活时间奖励（每步）
+    # === 战术奖励 ===
+    protect_manned_bonus: float = 0.3    # 每步有人机存活奖励
+    lock_enemy_manned: float = 2.0       # 锁定敌方有人机奖励
+    coordinated_attack: float = 3.0      # 多弹协同攻击奖励（is_fired_num > 1）
+    survival_bonus: float = 0.02         # 存活时间奖励（每步）
+
+    # === 距离相关奖励 ===
+    approach_enemy_manned: float = 0.1   # 接近敌方有人机奖励（每km）
+    keep_safe_distance: float = 0.05     # 有人机保持安全距离奖励
+    uav_screen_bonus: float = 0.2        # 无人机在有人机前方掩护奖励
+
+    # === 阈值配置 ===
+    low_altitude_threshold: float = 500.0      # 低高度警告阈值（米）
+    safe_distance_min: float = 5000.0          # 有人机最小安全距离（米）
+    safe_distance_max: float = 15000.0         # 有人机最大安全距离（米）
+
+    # === 中心区域占据奖励（僵持阶段关键）===
+    center_longitude: float = 146.1            # 中心区域经度（需根据实际地图调整）
+    center_latitude: float = 33.3              # 中心区域纬度（需根据实际地图调整）
+    center_radius: float = 20000.0             # 中心区域半径（米）
+    center_occupy_bonus: float = 1.0           # 普通单位在中心区域奖励（每步）
+    center_manned_bonus: float = 2.0           # 有人机在中心区域额外奖励（每步）
+    center_control_bonus: float = 5.0          # 己方单位数量优势时的控制奖励
+
+    # === 僵持阶段配置 ===
+    stalemate_threshold_steps: int = 300       # 判定僵持的步数阈值
+    stalemate_center_weight: float = 2.0       # 僵持阶段中心区域奖励权重倍数
+    no_missiles_bonus_multiplier: float = 3.0  # 双方导弹耗尽时中心奖励倍数
 
 
 @dataclass
 class BattleState:
     """战场状态跟踪"""
 
-    # 存活单位ID集合
-    own_manned_alive: Set[int] = field(default_factory=set)
-    own_uav_alive: Set[int] = field(default_factory=set)
-    enemy_manned_alive: Set[int] = field(default_factory=set)
-    enemy_uav_alive: Set[int] = field(default_factory=set)
+    # 存活单位名称集合
+    own_manned_alive: Set[str] = field(default_factory=set)
+    own_uav_alive: Set[str] = field(default_factory=set)
+    enemy_manned_alive: Set[str] = field(default_factory=set)
+    enemy_uav_alive: Set[str] = field(default_factory=set)
 
-    # 发射的导弹 {missile_id: (source_id, target_id, fire_time)}
-    missiles_in_flight: Dict[int, Tuple[int, int, float]] = field(default_factory=dict)
+    # 己方发射的导弹（跟踪中）
+    own_missiles_in_flight: Set[str] = field(default_factory=set)
+
+    # 上一步的broken_list（用于检测新增损失）
+    prev_broken_list: Set[str] = field(default_factory=set)
 
     # 统计
     total_missiles_fired: int = 0
@@ -65,7 +111,13 @@ class BattleState:
     enemy_uav_killed: int = 0
     own_manned_lost: int = 0
     own_uav_lost: int = 0
-    own_crashed: int = 0  # 非战斗坠机
+    own_crashed: int = 0
+
+    # 中心区域占据统计
+    own_center_occupy_steps: int = 0       # 己方在中心区域的累计步数
+    enemy_center_occupy_steps: int = 0     # 敌方在中心区域的累计步数
+    is_stalemate: bool = False             # 是否进入僵持阶段
+    no_missiles_detected: bool = False     # 是否检测到双方导弹耗尽
 
 
 class RewardCalculator:
@@ -73,13 +125,15 @@ class RewardCalculator:
     奖励计算器
 
     使用方法:
-    1. 每场对战开始时调用 reset()
-    2. 每步调用 step(current_obs, actions) 获取即时奖励
-    3. 对战结束时调用 finalize() 获取终局奖励
+    1. 每场对战开始时调用 reset(initial_obs)
+    2. 每步调用 step(prev_obs, curr_obs, actions) 获取即时奖励
+    3. 对战结束时调用 finalize(victory) 获取终局奖励
     """
 
-    def __init__(self, config: Optional[RewardConfig] = None):
+    def __init__(self, config: Optional[RewardConfig] = None, side: str = "red"):
         self.config = config or RewardConfig()
+        self.side = side  # "red" 或 "blue"
+        self.enemy_side = "blue" if side == "red" else "red"
         self.state = BattleState()
         self.step_count = 0
         self.total_reward = 0.0
@@ -100,44 +154,49 @@ class RewardCalculator:
             'missile_miss': 0.0,
             'crash': 0.0,
             'victory': 0.0,
-            'auxiliary': 0.0
+            'tactical': 0.0,
+            'auxiliary': 0.0,
+            'center_control': 0.0,  # 中心区域控制奖励
+            'stalemate_bonus': 0.0  # 僵持阶段奖励
         }
 
-        # 如果提供初始观测，解析初始状态
         if initial_obs:
             self._parse_initial_state(initial_obs)
 
     def _parse_initial_state(self, obs: Dict):
         """解析初始战场状态"""
         # 解析己方单位
-        if 'platform_list' in obs:
-            for platform in obs['platform_list']:
-                pid = platform.get('ID', platform.get('id', 0))
-                ptype = platform.get('Type', platform.get('type', 0))
+        for platform in obs.get('platform_list', []):
+            name = platform.get('name', '')
+            ptype = platform.get('type', '')
 
-                # Type: 1=有人机, 2=无人机 (根据实际定义调整)
-                if ptype == 1:  # 有人机
-                    self.state.own_manned_alive.add(pid)
-                else:  # 无人机
-                    self.state.own_uav_alive.add(pid)
+            if ptype == '有人机':
+                self.state.own_manned_alive.add(name)
+            elif ptype == '无人机':
+                self.state.own_uav_alive.add(name)
 
-        # 解析敌方单位
-        if 'track_list' in obs:
-            for track in obs['track_list']:
-                tid = track.get('ID', track.get('id', 0))
-                ttype = track.get('Type', track.get('type', 0))
+        # 解析敌方单位（从track_list中）
+        for track in obs.get('track_list', []):
+            name = track.get('target_name', '')
+            entity_type = track.get('platform_entity_type', '')
+            entity_side = track.get('platform_entity_side', '')
 
-                if ttype == 1:  # 有人机
-                    self.state.enemy_manned_alive.add(tid)
-                else:  # 无人机
-                    self.state.enemy_uav_alive.add(tid)
+            # 只统计敌方飞机，不统计导弹
+            if entity_side == self.enemy_side and entity_type != '导弹':
+                if entity_type == '有人机':
+                    self.state.enemy_manned_alive.add(name)
+                elif entity_type == '无人机':
+                    self.state.enemy_uav_alive.add(name)
+
+        # 初始化broken_list
+        self.state.prev_broken_list = set(obs.get('broken_list', []))
 
     def step(self, prev_obs: Dict, curr_obs: Dict, actions: Dict = None) -> float:
         """
         计算单步奖励
 
         Args:
-            prev_obs: 上一步观测
+            prev_obs: 上一步观测（side_data格式）
             curr_obs: 当前观测
             actions: 本步执行的动作
 
@@ -153,61 +212,65 @@ class RewardCalculator:
         # 2. 检测己方损失
         reward += self._check_own_losses(prev_obs, curr_obs)
 
-        # 3. 检测导弹发射和命中
+        # 3. 检测导弹状态
         reward += self._check_missiles(prev_obs, curr_obs, actions)
 
-        # 4. 检测坠机
-        reward += self._check_crashes(prev_obs, curr_obs)
+        # 4. 检测低高度警告
+        reward += self._check_altitude(curr_obs)
 
-        # 5. 辅助奖励
+        # 5. 战术奖励
+        reward += self._compute_tactical_rewards(curr_obs)
+
+        # 6. 辅助奖励
         reward += self._compute_auxiliary_rewards(curr_obs)
+
+        # 7. 中心区域占据奖励
+        reward += self._compute_center_control_reward(curr_obs)
+
+        # 8. 检测僵持阶段
+        self._check_stalemate(curr_obs)
+
+        # 更新prev_broken_list
+        self.state.prev_broken_list = set(curr_obs.get('broken_list', []))
 
         self.total_reward += reward
         return reward
 
     def _check_enemy_kills(self, prev_obs: Dict, curr_obs: Dict) -> float:
-        """检测敌方单位被击毁"""
+        """检测敌方单位被击毁（通过broken_list变化）"""
         reward = 0.0
 
-        prev_tracks = set()
-        curr_tracks = set()
+        curr_broken = set(curr_obs.get('broken_list', []))
+        new_broken = curr_broken - self.state.prev_broken_list
 
-        # 获取上一步敌方存活单位
-        if 'track_list' in prev_obs:
-            for track in prev_obs['track_list']:
-                tid = track.get('ID', track.get('id', 0))
-                prev_tracks.add(tid)
+        for broken_name in new_broken:
+            # 检查是否是敌方单位（名称包含敌方标识）
+            # 例如："蓝有人机1", "蓝无人机2"
+            if self.enemy_side == "blue" and broken_name.startswith("蓝"):
+                if "有人机" in broken_name and "_导弹" not in broken_name:
+                    reward += self.config.kill_enemy_manned
+                    self.state.enemy_manned_killed += 1
+                    self.state.enemy_manned_alive.discard(broken_name)
+                    self.reward_breakdown['kill_manned'] += self.config.kill_enemy_manned
+                    print(f"  [+{self.config.kill_enemy_manned}] 击毁敌方有人机: {broken_name}")
+                elif "无人机" in broken_name and "_导弹" not in broken_name:
+                    reward += self.config.kill_enemy_uav
+                    self.state.enemy_uav_killed += 1
+                    self.state.enemy_uav_alive.discard(broken_name)
+                    self.reward_breakdown['kill_uav'] += self.config.kill_enemy_uav
+                    print(f"  [+{self.config.kill_enemy_uav}] 击毁敌方无人机: {broken_name}")
 
-        # 获取当前敌方存活单位
-        if 'track_list' in curr_obs:
-            for track in curr_obs['track_list']:
-                tid = track.get('ID', track.get('id', 0))
-                curr_tracks.add(tid)
-
-        # 检测被击毁的敌方单位
-        killed = prev_tracks - curr_tracks
-
-        # 也检查broken_list
-        if 'broken_list' in curr_obs:
-            for broken in curr_obs['broken_list']:
-                bid = broken.get('ID', broken.get('id', 0))
-                if bid in self.state.enemy_manned_alive or bid in self.state.enemy_uav_alive:
-                    killed.add(bid)
-
-        for tid in killed:
-            if tid in self.state.enemy_manned_alive:
-                reward += self.config.kill_enemy_manned
-                self.state.enemy_manned_alive.discard(tid)
-                self.state.enemy_manned_killed += 1
-                self.reward_breakdown['kill_manned'] += self.config.kill_enemy_manned
-                print(f"  [REWARD] 击毁敌方有人机 +{self.config.kill_enemy_manned}")
-
-            elif tid in self.state.enemy_uav_alive:
-                reward += self.config.kill_enemy_uav
-                self.state.enemy_uav_alive.discard(tid)
-                self.state.enemy_uav_killed += 1
-                self.reward_breakdown['kill_uav'] += self.config.kill_enemy_uav
-                print(f"  [REWARD] 击毁敌方无人机 +{self.config.kill_enemy_uav}")
+            elif self.enemy_side == "red" and broken_name.startswith("红"):
+                if "有人机" in broken_name and "_导弹" not in broken_name:
+                    reward += self.config.kill_enemy_manned
+                    self.state.enemy_manned_killed += 1
+                    self.state.enemy_manned_alive.discard(broken_name)
+                    self.reward_breakdown['kill_manned'] += self.config.kill_enemy_manned
+                elif "无人机" in broken_name and "_导弹" not in broken_name:
+                    reward += self.config.kill_enemy_uav
+                    self.state.enemy_uav_killed += 1
+                    self.state.enemy_uav_alive.discard(broken_name)
+                    self.reward_breakdown['kill_uav'] += self.config.kill_enemy_uav
 
         return reward
 
@@ -215,33 +278,29 @@ class RewardCalculator:
         """检测己方损失"""
         reward = 0.0
 
-        prev_platforms = set()
-        curr_platforms = set()
+        curr_broken = set(curr_obs.get('broken_list', []))
+        new_broken = curr_broken - self.state.prev_broken_list
 
-        if 'platform_list' in prev_obs:
-            for p in prev_obs['platform_list']:
-                prev_platforms.add(p.get('ID', p.get('id', 0)))
+        side_prefix = "红" if self.side == "red" else "蓝"
 
-        if 'platform_list' in curr_obs:
-            for p in curr_obs['platform_list']:
-                curr_platforms.add(p.get('ID', p.get('id', 0)))
-
-        lost = prev_platforms - curr_platforms
-
-        for pid in lost:
-            if pid in self.state.own_manned_alive:
-                reward += self.config.lose_own_manned
-                self.state.own_manned_alive.discard(pid)
-                self.state.own_manned_lost += 1
-                self.reward_breakdown['lose_manned'] += self.config.lose_own_manned
-                print(f"  [REWARD] 己方有人机被击落 {self.config.lose_own_manned}")
-
-            elif pid in self.state.own_uav_alive:
-                reward += self.config.lose_own_uav
-                self.state.own_uav_alive.discard(pid)
-                self.state.own_uav_lost += 1
-                self.reward_breakdown['lose_uav'] += self.config.lose_own_uav
-                print(f"  [REWARD] 己方无人机被击落 {self.config.lose_own_uav}")
+        for broken_name in new_broken:
+            if broken_name.startswith(side_prefix):
+                if "有人机" in broken_name and "_导弹" not in broken_name:
+                    reward += self.config.lose_own_manned
+                    self.state.own_manned_lost += 1
+                    self.state.own_manned_alive.discard(broken_name)
+                    self.reward_breakdown['lose_manned'] += self.config.lose_own_manned
+                    print(f"  [{self.config.lose_own_manned}] 己方有人机被击落: {broken_name}")
+                elif "无人机" in broken_name and "_导弹" not in broken_name:
+                    reward += self.config.lose_own_uav
+                    self.state.own_uav_lost += 1
+                    self.state.own_uav_alive.discard(broken_name)
+                    self.reward_breakdown['lose_uav'] += self.config.lose_own_uav
+                    print(f"  [{self.config.lose_own_uav}] 己方无人机被击落: {broken_name}")
+                elif "_导弹" in broken_name:
+                    # 己方导弹消失，可能命中或未命中
+                    # 需要结合其他信息判断
+                    self.state.own_missiles_in_flight.discard(broken_name)
 
         return reward
 
@@ -249,65 +308,71 @@ class RewardCalculator:
         """检测导弹发射和命中"""
         reward = 0.0
 
-        # 检测导弹发射（从actions中）
-        if actions:
-            for unit_actions in actions.values():
-                if isinstance(unit_actions, dict):
-                    if unit_actions.get('fire_track') or unit_actions.get('fire'):
-                        reward += self.config.missile_fired
-                        self.state.total_missiles_fired += 1
-                        self.reward_breakdown['missile_cost'] += self.config.missile_fired
+        # 检测新发射的己方导弹（通过track_list中的己方导弹）
+        for track in curr_obs.get('track_list', []):
+            name = track.get('target_name', '')
+            entity_type = track.get('platform_entity_type', '')
+            entity_side = track.get('platform_entity_side', '')
 
-        # 检测导弹命中（通过敌方is_fired_num变化或其他方式）
-        # 这里需要根据实际仿真返回的数据结构调整
-        if 'hit_events' in curr_obs:
-            for hit in curr_obs['hit_events']:
-                reward += self.config.missile_hit
-                self.state.total_missiles_hit += 1
-                self.reward_breakdown['missile_hit'] += self.config.missile_hit
-                print(f"  [REWARD] 导弹命中 +{self.config.missile_hit}")
+            if entity_type == '导弹' and entity_side == self.side:
+                if name not in self.state.own_missiles_in_flight:
+                    # 新发射的导弹
+                    self.state.own_missiles_in_flight.add(name)
+                    self.state.total_missiles_fired += 1
+                    reward += self.config.missile_fired
+                    self.reward_breakdown['missile_cost'] += self.config.missile_fired
+
+        # 检测协同攻击奖励（敌方单位被多枚导弹锁定）
+        for track in curr_obs.get('track_list', []):
+            entity_side = track.get('platform_entity_side', '')
+            entity_type = track.get('platform_entity_type', '')
+            is_fired_num = track.get('is_fired_num', 0)
+
+            if entity_side == self.enemy_side and entity_type in ['有人机', '无人机']:
+                if is_fired_num > 1:
+                    # 协同攻击奖励
+                    coord_bonus = self.config.coordinated_attack * (is_fired_num - 1)
+                    reward += coord_bonus
+                    self.reward_breakdown['tactical'] += coord_bonus
 
         return reward
 
-    def _check_crashes(self, prev_obs: Dict, curr_obs: Dict) -> float:
-        """检测非战斗坠机（高度过低、失控等）"""
+    def _check_altitude(self, curr_obs: Dict) -> float:
+        """检测低高度警告"""
         reward = 0.0
 
-        # 检测高度过低
-        if 'platform_list' in curr_obs:
-            for p in curr_obs['platform_list']:
-                alt = p.get('Alt', p.get('alt', p.get('Z', 1000)))
-                if alt < 100:  # 高度阈值
-                    # 可能即将坠机，给予警告惩罚
-                    reward -= 0.1
-
-        # 检测坠机事件
-        if 'crash_events' in curr_obs:
-            for crash in curr_obs['crash_events']:
-                pid = crash.get('ID', crash.get('id', 0))
-                # 排除战斗损失，只计算非战斗坠机
-                if pid not in self._get_combat_losses(prev_obs, curr_obs):
-                    reward += self.config.crash_penalty
-                    self.state.own_crashed += 1
-                    self.reward_breakdown['crash'] += self.config.crash_penalty
-                    print(f"  [REWARD] 非战斗坠机 {self.config.crash_penalty}")
+        for platform in curr_obs.get('platform_list', []):
+            alt = platform.get('altitude', 3000)
+            if alt < self.config.low_altitude_threshold:
+                reward += self.config.low_altitude_warning
+                self.reward_breakdown['crash'] += self.config.low_altitude_warning
 
         return reward
 
-    def _get_combat_losses(self, prev_obs: Dict, curr_obs: Dict) -> Set[int]:
-        """获取战斗损失的单位ID"""
-        combat_losses = set()
-        if 'broken_list' in curr_obs:
-            for b in curr_obs['broken_list']:
-                combat_losses.add(b.get('ID', b.get('id', 0)))
-        return combat_losses
+    def _compute_tactical_rewards(self, curr_obs: Dict) -> float:
+        """计算战术奖励"""
+        reward = 0.0
+
+        # 锁定敌方有人机奖励
+        for track in curr_obs.get('track_list', []):
+            entity_side = track.get('platform_entity_side', '')
+            entity_type = track.get('platform_entity_type', '')
+            is_fired_num = track.get('is_fired_num', 0)
+
+            if entity_side == self.enemy_side and entity_type == '有人机':
+                if is_fired_num > 0:
+                    reward += self.config.lock_enemy_manned
+                    self.reward_breakdown['tactical'] += self.config.lock_enemy_manned
+
+        return reward
 
     def _compute_auxiliary_rewards(self, curr_obs: Dict) -> float:
         """计算辅助奖励"""
         reward = 0.0
 
         # 有人机存活奖励
-        manned_count = len(self.state.own_manned_alive)
+        manned_count = sum(1 for p in curr_obs.get('platform_list', [])
+                          if p.get('type') == '有人机')
         reward += manned_count * self.config.protect_manned_bonus
 
         # 存活时间奖励
@@ -316,26 +381,120 @@ class RewardCalculator:
         self.reward_breakdown['auxiliary'] += reward
         return reward
 
+    def _compute_center_control_reward(self, curr_obs: Dict) -> float:
+        """计算中心区域控制奖励"""
+        reward = 0.0
+
+        # 统计己方和敌方在中心区域的单位数量
+        own_in_center = 0
+        own_manned_in_center = 0
+        enemy_in_center = 0
+
+        center_lon = self.config.center_longitude
+        center_lat = self.config.center_latitude
+        center_radius = self.config.center_radius
+
+        # 检查己方单位
+        for platform in curr_obs.get('platform_list', []):
+            lon = platform.get('longitude', platform.get('X', 0))
+            lat = platform.get('latitude', platform.get('Y', 0))
+            dist = compute_distance(lon, lat, center_lon, center_lat)
+
+            if dist <= center_radius:
+                own_in_center += 1
+                if platform.get('type') == '有人机':
+                    own_manned_in_center += 1
+
+        # 检查敌方单位（从track_list）
+        for track in curr_obs.get('track_list', []):
+            entity_side = track.get('platform_entity_side', '')
+            entity_type = track.get('platform_entity_type', '')
+
+            if entity_side == self.enemy_side and entity_type in ['有人机', '无人机']:
+                lon = track.get('longitude', track.get('X', 0))
+                lat = track.get('latitude', track.get('Y', 0))
+                dist = compute_distance(lon, lat, center_lon, center_lat)
+
+                if dist <= center_radius:
+                    enemy_in_center += 1
+
+        # 更新占据统计
+        if own_in_center > 0:
+            self.state.own_center_occupy_steps += 1
+        if enemy_in_center > 0:
+            self.state.enemy_center_occupy_steps += 1
+
+        # 计算奖励倍数（僵持或无导弹时增加）
+        multiplier = 1.0
+        if self.state.is_stalemate:
+            multiplier *= self.config.stalemate_center_weight
+        if self.state.no_missiles_detected:
+            multiplier *= self.config.no_missiles_bonus_multiplier
+
+        # 基础占据奖励
+        reward += own_in_center * self.config.center_occupy_bonus * multiplier
+
+        # 有人机在中心的额外奖励
+        reward += own_manned_in_center * self.config.center_manned_bonus * multiplier
+
+        # 区域控制优势奖励（己方多于敌方）
+        if own_in_center > enemy_in_center:
+            advantage = own_in_center - enemy_in_center
+            reward += self.config.center_control_bonus * advantage * multiplier
+
+        self.reward_breakdown['center_control'] += reward
+        return reward
+
+    def _check_stalemate(self, curr_obs: Dict):
+        """检测僵持阶段"""
+        # 步数达到阈值
+        if self.step_count >= self.config.stalemate_threshold_steps:
+            self.state.is_stalemate = True
+
+        # 检测双方导弹是否耗尽
+        own_missiles = 0
+        for platform in curr_obs.get('platform_list', []):
+            for weapon in platform.get('weapons', []):
+                own_missiles += weapon.get('quantity', 0)
+
+        # 如果己方导弹耗尽，标记（假设敌方也类似）
+        if own_missiles == 0:
+            self.state.no_missiles_detected = True
+
+    def _get_center_control_time_ratio(self) -> float:
+        """获取中心区域控制时间比例"""
+        total = self.state.own_center_occupy_steps + self.state.enemy_center_occupy_steps
+        if total == 0:
+            return 0.5
+        return self.state.own_center_occupy_steps / total
+
     def finalize(self, victory: bool) -> float:
-        """
-        对战结束，计算终局奖励
-
-        Args:
-            victory: 是否胜利
-
-        Returns:
-            终局奖励
-        """
+        """对战结束，计算终局奖励"""
         reward = 0.0
 
         if victory:
             reward += self.config.victory_bonus
             self.reward_breakdown['victory'] = self.config.victory_bonus
-            print(f"  [REWARD] 胜利 +{self.config.victory_bonus}")
+            print(f"  [+{self.config.victory_bonus}] 胜利!")
         else:
             reward += self.config.defeat_penalty
             self.reward_breakdown['victory'] = self.config.defeat_penalty
-            print(f"  [REWARD] 失败 {self.config.defeat_penalty}")
+            print(f"  [{self.config.defeat_penalty}] 失败")
+
+        # 僵持阶段的中心区域控制奖励
+        if self.state.is_stalemate or self.state.no_missiles_detected:
+            center_ratio = self._get_center_control_time_ratio()
+            # 如果己方占据中心时间更长，给予额外奖励
+            if center_ratio > 0.5:
+                stalemate_bonus = (center_ratio - 0.5) * 100  # 最多+50
+                reward += stalemate_bonus
+                self.reward_breakdown['stalemate_bonus'] = stalemate_bonus
+                print(f"  [+{stalemate_bonus:.1f}] 中心区域控制优势 (占据比例: {center_ratio:.1%})")
+            elif center_ratio < 0.5:
+                stalemate_penalty = (0.5 - center_ratio) * 60  # 最多-30
+                reward -= stalemate_penalty
+                self.reward_breakdown['stalemate_bonus'] = -stalemate_penalty
+                print(f"  [-{stalemate_penalty:.1f}] 中心区域控制劣势 (占据比例: {center_ratio:.1%})")
 
         self.total_reward += reward
         return reward
@@ -353,7 +512,12 @@ class RewardCalculator:
                 'missiles_fired': self.state.total_missiles_fired,
                 'missiles_hit': self.state.total_missiles_hit,
                 'crashes': self.state.own_crashed,
-                'steps': self.step_count
+                'steps': self.step_count,
+                'own_center_occupy_steps': self.state.own_center_occupy_steps,
+                'enemy_center_occupy_steps': self.state.enemy_center_occupy_steps,
+                'center_control_ratio': self._get_center_control_time_ratio(),
+                'is_stalemate': self.state.is_stalemate,
+                'no_missiles': self.state.no_missiles_detected
             }
         }
 
@@ -374,53 +538,54 @@ class RewardCalculator:
         print("=" * 50)
 
 
-# === 简化版奖励函数（用于快速集成）===
+# === 工具函数 ===
 
-def compute_step_reward(prev_obs: Dict, curr_obs: Dict,
-                        actions: Dict = None,
-                        config: RewardConfig = None) -> float:
+def compute_distance(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
     """
-    简化版单步奖励计算
-
-    可直接在battle_func中使用
+    计算两点之间的距离（米）
+    使用Haversine公式
     """
-    if config is None:
-        config = RewardConfig()
+    R = 6371000  # 地球半径（米）
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
 
-    reward = 0.0
+    a = math.sin(delta_phi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
-    # 检测敌方损失
-    prev_enemy = set()
-    curr_enemy = set()
-
-    for t in prev_obs.get('track_list', []):
-        prev_enemy.add(t.get('ID', t.get('id', 0)))
-    for t in curr_obs.get('track_list', []):
-        curr_enemy.add(t.get('ID', t.get('id', 0)))
-
-    killed_enemy = prev_enemy - curr_enemy
-    for _ in killed_enemy:
-        # 简化：统一给击杀奖励
-        reward += config.kill_enemy_uav
-
-    # 检测己方损失
-    prev_own = set()
-    curr_own = set()
-
-    for p in prev_obs.get('platform_list', []):
-        prev_own.add(p.get('ID', p.get('id', 0)))
-    for p in curr_obs.get('platform_list', []):
-        curr_own.add(p.get('ID', p.get('id', 0)))
-
-    lost_own = prev_own - curr_own
-    for _ in lost_own:
-        reward += config.lose_own_uav
-
-    return reward
+    return R * c
 
 
-def compute_final_reward(own_manned_alive: int, enemy_manned_alive: int,
-                         own_uav_alive: int, enemy_uav_alive: int,
+def get_unit_counts(obs: Dict, side: str) -> Dict[str, int]:
+    """
+    统计单位数量
+
+    Returns:
+        {'own_manned': n, 'own_uav': n, 'enemy_manned': n, 'enemy_uav': n}
+    """
+    enemy_side = "blue" if side == "red" else "red"
+
+    own_manned = sum(1 for p in obs.get('platform_list', []) if p.get('type') == '有人机')
+    own_uav = sum(1 for p in obs.get('platform_list', []) if p.get('type') == '无人机')
+
+    enemy_manned = sum(1 for t in obs.get('track_list', [])
+                       if t.get('platform_entity_side') == enemy_side
+                       and t.get('platform_entity_type') == '有人机')
+    enemy_uav = sum(1 for t in obs.get('track_list', [])
+                    if t.get('platform_entity_side') == enemy_side
+                    and t.get('platform_entity_type') == '无人机')
+
+    return {
+        'own_manned': own_manned,
+        'own_uav': own_uav,
+        'enemy_manned': enemy_manned,
+        'enemy_uav': enemy_uav
+    }
+
+
+def compute_final_reward(own_manned: int, enemy_manned: int,
+                         own_uav: int, enemy_uav: int,
                          config: RewardConfig = None) -> Tuple[float, bool]:
     """
     计算终局奖励
@@ -432,60 +597,56 @@ def compute_final_reward(own_manned_alive: int, enemy_manned_alive: int,
         config = RewardConfig()
 
     # 胜利条件：敌方有人机全灭
-    victory = enemy_manned_alive == 0 and own_manned_alive > 0
+    victory = enemy_manned == 0 and own_manned > 0
 
     if victory:
         return config.victory_bonus, True
-    elif own_manned_alive == 0:
+    elif own_manned == 0:
         return config.defeat_penalty, False
     else:
         # 未分胜负，按存活比例给分
-        own_score = own_manned_alive * 3 + own_uav_alive
-        enemy_score = enemy_manned_alive * 3 + enemy_uav_alive
+        own_score = own_manned * 3 + own_uav
+        enemy_score = enemy_manned * 3 + enemy_uav
         ratio = (own_score - enemy_score) / max(own_score + enemy_score, 1)
         return ratio * 20, ratio > 0
 
 
 # 测试代码
 if __name__ == "__main__":
-    # 测试奖励计算器
-    calc = RewardCalculator()
+    # 使用真实数据结构测试
+    calc = RewardCalculator(side="red")
 
-    # 模拟初始状态
+    # 模拟初始状态（基于态势数据示例）
     initial_obs = {
         'platform_list': [
-            {'ID': 1, 'Type': 1},  # 有人机
-            {'ID': 2, 'Type': 2},  # 无人机
-            {'ID': 3, 'Type': 2},
-            {'ID': 4, 'Type': 2},
-            {'ID': 5, 'Type': 2},
+            {'id': 1, 'name': '红无人机1', 'type': '无人机', 'altitude': 3459},
+            {'id': 25, 'name': '红无人机4', 'type': '无人机', 'altitude': 3491},
+            {'id': 73, 'name': '红有人机2', 'type': '有人机', 'altitude': 3551},
         ],
         'track_list': [
-            {'ID': 101, 'Type': 1},  # 敌方有人机
-            {'ID': 102, 'Type': 2},  # 敌方无人机
-            {'ID': 103, 'Type': 2},
-            {'ID': 104, 'Type': 2},
-            {'ID': 105, 'Type': 2},
-        ]
+            {'target_id': 89, 'target_name': '蓝无人机2', 'platform_entity_type': '无人机',
+             'platform_entity_side': 'blue', 'is_fired_num': 1},
+            {'target_id': 145, 'target_name': '蓝有人机1', 'platform_entity_type': '有人机',
+             'platform_entity_side': 'blue', 'is_fired_num': 0},
+        ],
+        'broken_list': ['红无人机2', '红无人机1_导弹_1']
     }
 
     calc.reset(initial_obs)
 
-    # 模拟击毁敌方无人机
-    prev_obs = initial_obs.copy()
-    curr_obs = {
+    # 模拟下一步：击毁敌方无人机
+    next_obs = {
         'platform_list': initial_obs['platform_list'],
         'track_list': [
-            {'ID': 101, 'Type': 1},
-            {'ID': 102, 'Type': 2},
-            {'ID': 103, 'Type': 2},
-            # ID 104, 105 被击毁
-        ]
+            {'target_id': 145, 'target_name': '蓝有人机1', 'platform_entity_type': '有人机',
+             'platform_entity_side': 'blue', 'is_fired_num': 2},  # 被多枚导弹锁定
+        ],
+        'broken_list': ['红无人机2', '红无人机1_导弹_1', '蓝无人机2']  # 新增
     }
 
-    reward = calc.step(prev_obs, curr_obs)
-    print(f"Step reward: {reward}")
+    reward = calc.step(initial_obs, next_obs)
+    print(f"\nStep reward: {reward:.2f}")
 
-    # 结束对战
+    # 胜利
     calc.finalize(victory=True)
     calc.print_summary()
