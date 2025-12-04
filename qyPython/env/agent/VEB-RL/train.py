@@ -1,30 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-VEB-RL ­Ã/¨,
+VEB-RL /,
 
-úº‡: Value-Evolutionary-Based Reinforcement Learning (ICML 2024)
+: Value-Evolutionary-Based Reinforcement Learning (ICML 2024)
 
-(¹Õ:
-    # (!ß¯ƒKÕ­ÃA
+(:
+    # (!ß¯KÕ­A
     python train.py --mock
 
-    # Ş¥ÿ¯ƒ­Ã
+    # Ş¥
     python train.py --real
 
-    # ÎÀå¹b­Ã
+    # b
     python train.py --real --resume checkpoints/veb/checkpoint_gen50.npz
 
-    # ( Dueling DQN QÜ
+    # ( Dueling DQN Q
     python train.py --mock --dueling
 
-    # êšIÂp:‹
+    # Ip:
     python train.py --mock --population 100 --elite-size 20 --generations 200
 """
 import argparse
 import os
 import sys
 
-# û yîï„
+# y
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, PROJECT_ROOT)
 
@@ -38,19 +38,19 @@ def parse_args():
         description='VEB-RL Training - Value-Evolutionary-Based Reinforcement Learning'
     )
 
-    # ­Ã!
+    # !
     parser.add_argument('--mock', action='store_true',
                         help='Use mock environment for testing')
     parser.add_argument('--real', action='store_true',
                         help='Use real simulation environment')
 
-    # Í¤Âp
+    # Í¤p
     parser.add_argument('--population', type=int, default=50,
                         help='Population size (default: 50)')
     parser.add_argument('--generations', type=int, default=100,
                         help='Number of generations (default: 100)')
 
-    # VEB-RL 8ÃÂp
+    # VEB-RL 8p
     parser.add_argument('--elite-size', type=int, default=10,
                         help='Number of elite individuals N for interaction (default: 10)')
     parser.add_argument('--target-update-freq', type=int, default=10,
@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument('--gamma', type=float, default=0.99,
                         help='Discount factor (default: 0.99)')
 
-    # W —ÕÂp
+    # W p
     parser.add_argument('--elite-ratio', type=float, default=0.1,
                         help='Elite ratio for evolution (default: 0.1)')
     parser.add_argument('--crossover-prob', type=float, default=0.8,
@@ -68,7 +68,7 @@ def parse_args():
     parser.add_argument('--mutation-std', type=float, default=0.1,
                         help='Mutation standard deviation (default: 0.1)')
 
-    # RL Âp
+    # RL p
     parser.add_argument('--rl-lr', type=float, default=1e-3,
                         help='RL Q network learning rate (default: 1e-3)')
     parser.add_argument('--rl-batch-size', type=int, default=256,
@@ -78,7 +78,7 @@ def parse_args():
     parser.add_argument('--buffer-capacity', type=int, default=100000,
                         help='Replay buffer capacity (default: 100000)')
 
-    # ¤’Âp
+    # p
     parser.add_argument('--episodes-per-elite', type=int, default=3,
                         help='Episodes per elite individual (default: 3)')
     parser.add_argument('--max-episode-steps', type=int, default=1000,
@@ -90,17 +90,17 @@ def parse_args():
     parser.add_argument('--epsilon-decay', type=float, default=0.995,
                         help='Epsilon decay rate per generation (default: 0.995)')
 
-    # QÜÂp
+    # Qp
     parser.add_argument('--state-dim', type=int, default=230,
                         help='State dimension (default: 230)')
-    parser.add_argument('--action-dim', type=int, default=40,
+    parser.add_argument('--action-dim', type=int, default=60,
                         help='Action dimension (default: 40)')
     parser.add_argument('--hidden-dims', type=str, default='256,256',
                         help='Hidden layer dimensions, comma-separated (default: 256,256)')
     parser.add_argument('--dueling', action='store_true',
                         help='Use Dueling DQN network architecture')
 
-    # V±Âp
+    # Vp
     parser.add_argument('--center-lon', type=float, default=146.1,
                         help='Center zone longitude (default: 146.1)')
     parser.add_argument('--center-lat', type=float, default=33.3,
@@ -108,7 +108,7 @@ def parse_args():
     parser.add_argument('--center-radius', type=float, default=20000.0,
                         help='Center zone radius in meters (default: 20000)')
 
-    # vÖ
+    # v
     parser.add_argument('--device', type=str, default='auto',
                         help='Device: auto/cpu/cuda (default: auto)')
     parser.add_argument('--save-dir', type=str, default='./checkpoints/veb',
@@ -129,57 +129,57 @@ def main():
     print("Based on ICML 2024 Paper")
     print("=" * 60)
 
-    # ãÏBô¦
+    # ãB
     hidden_dims = tuple(int(x) for x in args.hidden_dims.split(','))
 
-    # MnV±ıp
+    # MnVp
     reward_config = RewardConfig(
         center_longitude=args.center_lon,
         center_latitude=args.center_lat,
         center_radius=args.center_radius,
     )
 
-    # ú VEB-RL ­Ãh
+    #  VEB-RL h
     trainer = VEBTrainer(
-        # Í¤Âp
+        # Í¤p
         population_size=args.population,
         state_dim=args.state_dim,
         action_dim=args.action_dim,
         hidden_dims=hidden_dims,
         use_dueling=args.dueling,
 
-        # VEB-RL Âp
+        # VEB-RL p
         elite_size=args.elite_size,
         target_update_freq=args.target_update_freq,
         gamma=args.gamma,
 
-        # W —ÕÂp
+        # W p
         elite_ratio=args.elite_ratio,
         crossover_prob=args.crossover_prob,
         mutation_prob=args.mutation_prob,
         mutation_std=args.mutation_std,
 
-        # RL Âp
+        # RL p
         rl_lr=args.rl_lr,
         rl_batch_size=args.rl_batch_size,
         rl_updates_per_gen=args.rl_updates,
         buffer_capacity=args.buffer_capacity,
 
-        # ¤’Âp
+        # p
         episodes_per_elite=args.episodes_per_elite,
         max_episode_steps=args.max_episode_steps,
         epsilon_start=args.epsilon_start,
         epsilon_end=args.epsilon_end,
         epsilon_decay=args.epsilon_decay,
 
-        # ­ÃÂp
+        # p
         generations=args.generations,
         device=args.device,
         save_dir=args.save_dir,
         log_freq=args.log_freq,
     )
 
-    # ÎÀå¹b
+    # b
     if args.resume:
         print(f"Resuming from checkpoint: {args.resume}")
         trainer.load_checkpoint(args.resume)
@@ -218,7 +218,7 @@ def main():
     print(f"  Device: {trainer.device}")
     print(f"  Save dir: {args.save_dir}")
 
-    #  Ë­Ã
+    # Ë­
     print("\nStarting training...")
     best_individual = trainer.train(
         env_step_func=env_step,
@@ -237,7 +237,7 @@ def main():
     print(f"Checkpoints saved to: {args.save_dir}")
     print("=" * 60)
 
-    # sí¯ƒ
+    # s
     if hasattr(env, 'close'):
         env.close()
 

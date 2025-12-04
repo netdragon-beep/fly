@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-VEB-RL *SšI
+VEB-RL *Sï¿½I
 
-úº‡: Value-Evolutionary-Based Reinforcement Learning (ICML 2024)
+ï¿½ï¿½ï¿½ï¿½: Value-Evolutionary-Based Reinforcement Learning (ICML 2024)
 
-Ï**S+:
-- QQÜ (theta)
-- îQQÜ (theta')
-- ”¦ = TDïî: f(theta, theta') = -E[(r + gamma * max_a' Q_theta'(s', a') - Q_theta(s, a))^2]
+ï¿½**S+:
+- QQï¿½ (theta)
+- ï¿½QQï¿½ (theta')
+- ï¿½ï¿½ = TDï¿½ï¿½: f(theta, theta') = -E[(r + gamma * max_a' Q_theta'(s', a') - Q_theta(s, a))^2]
 """
 import torch
 import torch.nn as nn
@@ -15,25 +15,33 @@ import numpy as np
 from typing import Optional, Tuple, List
 import copy
 
-from .q_network import (
-    QNetwork, DuelingQNetwork,
-    encode_q_weights, decode_q_weights,
-    create_target_network, hard_update
-)
+# æ”¯æŒç›´æ¥è¿è¡Œå’Œä½œä¸ºæ¨¡å—å¯¼å…¥
+try:
+    from .q_network import (
+        QNetwork, DuelingQNetwork,
+        encode_q_weights, decode_q_weights,
+        create_target_network, hard_update
+    )
+except ImportError:
+    from q_network import (
+        QNetwork, DuelingQNetwork,
+        encode_q_weights, decode_q_weights,
+        create_target_network, hard_update
+    )
 
 
 class VEBIndividual:
     """
     VEB-RL *S{
 
-    + Q QÜŒî Q QÜ”¦ú TD ïî
+    + Q QÜŒï¿½ Q Qï¿½ï¿½ï¿½ï¿½ï¿½ TD ï¿½ï¿½
 
     Attributes:
-        q_weights: QQÜ„AsCÍ
-        target_weights: îQQÜ„AsCÍ
-        fitness: ”¦< (TDïî)
-        td_error: TDïî
-        episode_return: /ïŞ¥(å×	
+        q_weights: QQÜ„AsCï¿½
+        target_weights: ï¿½QQÜ„AsCï¿½
+        fitness: ï¿½ï¿½< (TDï¿½ï¿½)
+        td_error: TDï¿½ï¿½
+        episode_return: /ï¿½Ş¥(ï¿½ï¿½ï¿½	
     """
 
     def __init__(
@@ -46,22 +54,22 @@ class VEBIndividual:
         use_dueling: bool = False
     ):
         """
-        Ë*S
+        ï¿½*S
 
         Args:
-            q_weights: QQÜCÍNone:Ë
-            target_weights: îQÜCÍNone6QQÜ
-            state_dim: ¶ô¦
-            action_dim: ¨\ô¦
-            hidden_dims: ÏBô¦
-            use_dueling: /&(DuelingQÜ
+            q_weights: QQï¿½Cï¿½Noneï¿½:ï¿½
+            target_weights: ï¿½Qï¿½Cï¿½None6QQï¿½
+            state_dim: ï¿½ï¿½ï¿½
+            action_dim: ï¿½\ï¿½ï¿½
+            hidden_dims: ï¿½ï¿½Bï¿½ï¿½
+            use_dueling: /&(DuelingQï¿½
         """
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.hidden_dims = hidden_dims
         self.use_dueling = use_dueling
 
-        # ú!QÜ·ÖÂppÏ
+        # ï¿½!QÜ·ï¿½ï¿½ppï¿½
         if use_dueling:
             template = DuelingQNetwork(state_dim, action_dim, hidden_dims)
         else:
@@ -69,26 +77,26 @@ class VEBIndividual:
 
         self.num_params = template.num_params
 
-        # Ë Q QÜCÍ
+        # ï¿½ Q Qï¿½Cï¿½
         if q_weights is None:
             self.q_weights = encode_q_weights(template)
         else:
             self.q_weights = q_weights.astype(np.float32)
 
-        # ËîQÜCÍ
+        # ï¿½ï¿½Qï¿½Cï¿½
         if target_weights is None:
             self.target_weights = self.q_weights.copy()
         else:
             self.target_weights = target_weights.astype(np.float32)
 
-        # ”¦Œß¡áo
-        self.fitness = -float('inf')  # TDïîŠ'Š}
+        # ï¿½ï¿½ï¿½ß¡ï¿½o
+        self.fitness = -float('inf')  # TDï¿½ï¿½ï¿½'ï¿½}
         self.td_error = float('inf')
         self.episode_return = 0.0
         self.episodes_evaluated = 0
 
     def create_q_network(self, device: str = 'cpu') -> nn.Module:
-        """úQQÜv }CÍ"""
+        """ï¿½QQï¿½vï¿½}Cï¿½"""
         if self.use_dueling:
             network = DuelingQNetwork(
                 self.state_dim, self.action_dim, self.hidden_dims
@@ -102,7 +110,7 @@ class VEBIndividual:
         return network
 
     def create_target_network(self, device: str = 'cpu') -> nn.Module:
-        """úîQQÜv }CÍ"""
+        """ï¿½ï¿½QQï¿½vï¿½}Cï¿½"""
         if self.use_dueling:
             network = DuelingQNetwork(
                 self.state_dim, self.action_dim, self.hidden_dims
@@ -113,17 +121,17 @@ class VEBIndividual:
             ).to(device)
 
         decode_q_weights(self.target_weights, network)
-        # »ÓÂp
+        # ï¿½ï¿½ï¿½p
         for param in network.parameters():
             param.requires_grad = False
         return network
 
     def update_from_network(self, q_network: nn.Module):
-        """ÎQQÜô°CÍ"""
+        """ï¿½QQï¿½ï¿½ï¿½Cï¿½"""
         self.q_weights = encode_q_weights(q_network)
 
     def update_target_from_q(self):
-        """QQÜCÍ60îQÜ"""
+        """QQï¿½Cï¿½60ï¿½Qï¿½"""
         self.target_weights = self.q_weights.copy()
 
     def compute_fitness(
@@ -135,19 +143,19 @@ class VEBIndividual:
         n_batches: int = 10
     ) -> float:
         """
-        ¡—”¦TDïî	
+        ï¿½ï¿½ï¿½ï¿½TDï¿½ï¿½	
 
         f(theta, theta') = -E[(r + gamma * max_a' Q_theta'(s', a') - Q_theta(s, a))^2]
 
         Args:
-            replay_buffer: ÏŒŞ>²:
-            batch_size: yÏ'
-            gamma: ˜càP
-            device: ¡—¾
-            n_batches: (Ä0„y!p
+            replay_buffer: ÏŒï¿½>ï¿½:
+            batch_size: yï¿½'
+            gamma: ï¿½cï¿½P
+            device: ï¿½ï¿½ï¿½
+            n_batches: (ï¿½ï¿½0ï¿½y!p
 
         Returns:
-            fitness: ”¦<
+            fitness: ï¿½ï¿½<
         """
         if len(replay_buffer) < batch_size:
             return -float('inf')
@@ -187,12 +195,12 @@ class VEBIndividual:
 
         avg_td_error = total_td_error / n_batches
         self.td_error = avg_td_error
-        self.fitness = -avg_td_error  # TDïî\:”¦
+        self.fitness = -avg_td_error  # TDï¿½ï¿½\:ï¿½ï¿½
 
         return self.fitness
 
     def copy(self) -> 'VEBIndividual':
-        """ñ÷"""
+        """ï¿½ï¿½"""
         new_ind = VEBIndividual(
             q_weights=self.q_weights.copy(),
             target_weights=self.target_weights.copy(),
@@ -214,16 +222,16 @@ class VEBIndividual:
 
 class ReplayBuffer:
     """
-    ÏŒŞ>²:
+    ÏŒï¿½>ï¿½:
 
-    X¨ (s, a, r, s', done) lû
+    Xï¿½ (s, a, r, s', done) lï¿½
     """
 
     def __init__(self, capacity: int = 100000, state_dim: int = 230):
         self.capacity = capacity
         self.state_dim = state_dim
 
-        # „M…X
+        # ï¿½Mï¿½X
         self.states = np.zeros((capacity, state_dim), dtype=np.float32)
         self.actions = np.zeros(capacity, dtype=np.int64)
         self.rewards = np.zeros(capacity, dtype=np.float32)
@@ -235,7 +243,7 @@ class ReplayBuffer:
 
     def add(self, state: np.ndarray, action: int, reward: float,
             next_state: np.ndarray, done: bool):
-        """û lû"""
+        """ï¿½ï¿½lï¿½"""
         self.states[self.ptr] = state
         self.actions[self.ptr] = action
         self.rewards[self.ptr] = reward
@@ -248,7 +256,7 @@ class ReplayBuffer:
     def add_batch(self, states: np.ndarray, actions: np.ndarray,
                   rewards: np.ndarray, next_states: np.ndarray,
                   dones: np.ndarray):
-        """yÏû lû"""
+        """yï¿½ï¿½ï¿½lï¿½"""
         batch_size = len(states)
         indices = np.arange(self.ptr, self.ptr + batch_size) % self.capacity
 
@@ -262,7 +270,7 @@ class ReplayBuffer:
         self.size = min(self.size + batch_size, self.capacity)
 
     def sample(self, batch_size: int) -> dict:
-        """:Ç7yÏ"""
+        """ï¿½:ï¿½7yï¿½"""
         indices = np.random.randint(0, self.size, size=batch_size)
 
         return {
@@ -277,7 +285,7 @@ class ReplayBuffer:
         return self.size
 
     def clear(self):
-        """z²:"""
+        """zï¿½:"""
         self.ptr = 0
         self.size = 0
 
@@ -286,7 +294,7 @@ class VEBPopulation:
     """
     VEB-RL Í¤
 
-    ¡ Ä VEBIndividual
+    ï¿½ï¿½ VEBIndividual
     """
 
     def __init__(
@@ -306,7 +314,7 @@ class VEBPopulation:
         self.individuals: List[VEBIndividual] = []
         self.generation = 0
 
-        # ß¡áo
+        # ß¡ï¿½o
         self.history = {
             'best_fitness': [],
             'avg_fitness': [],
@@ -317,7 +325,7 @@ class VEBPopulation:
         }
 
     def initialize_random(self):
-        """:ËÍ¤"""
+        """ï¿½:ï¿½Í¤"""
         self.individuals = [
             VEBIndividual(
                 state_dim=self.state_dim,
@@ -330,7 +338,7 @@ class VEBPopulation:
         self.generation = 0
 
     def get_elite(self, n: int = 1) -> List[VEBIndividual]:
-        """·Ö”¦ Ø„n**S"""
+        """ï¿½ï¿½ï¿½ï¿½Ø„n**S"""
         sorted_inds = sorted(
             self.individuals,
             key=lambda x: x.fitness,
@@ -339,7 +347,7 @@ class VEBPopulation:
         return sorted_inds[:n]
 
     def get_worst(self, n: int = 1) -> List[VEBIndividual]:
-        """·Ö”¦ N„n**S"""
+        """ï¿½ï¿½ï¿½ï¿½Nï¿½n**S"""
         sorted_inds = sorted(
             self.individuals,
             key=lambda x: x.fitness
@@ -347,7 +355,7 @@ class VEBPopulation:
         return sorted_inds[:n]
 
     def compute_statistics(self) -> dict:
-        """¡—Í¤ß¡áo"""
+        """ï¿½ï¿½Í¤ß¡ï¿½o"""
         fitnesses = [ind.fitness for ind in self.individuals
                      if ind.fitness > -float('inf')]
         td_errors = [ind.td_error for ind in self.individuals
@@ -375,7 +383,7 @@ class VEBPopulation:
         stats['best_return'] = max(returns) if returns else 0.0
         stats['avg_return'] = np.mean(returns) if returns else 0.0
 
-        # °U†ò
+        # ï¿½Uï¿½ï¿½
         self.history['best_fitness'].append(stats['best_fitness'])
         self.history['avg_fitness'].append(stats['avg_fitness'])
         self.history['best_td_error'].append(stats['best_td_error'])
@@ -386,18 +394,18 @@ class VEBPopulation:
         return stats
 
     def update_generation(self, new_individuals: List[VEBIndividual]):
-        """ô°0 ã"""
+        """ï¿½ï¿½0ï¿½"""
         self.individuals = new_individuals
         self.size = len(new_individuals)
         self.generation += 1
 
     def update_all_target_networks(self):
-        """ô°@	*S„îQÜ"""
+        """ï¿½ï¿½@	*Sï¿½ï¿½Qï¿½"""
         for ind in self.individuals:
             ind.update_target_from_q()
 
     def save(self, path: str):
-        """İXÍ¤"""
+        """ï¿½XÍ¤"""
         import os
         os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
 
@@ -423,7 +431,7 @@ class VEBPopulation:
         print(f"VEB Population saved to {path}")
 
     def load(self, path: str):
-        """ }Í¤"""
+        """ï¿½}Í¤"""
         data = np.load(path, allow_pickle=True)
 
         self.generation = int(data['generation'])
@@ -455,7 +463,7 @@ class VEBPopulation:
 
         self.size = len(self.individuals)
 
-        #  }†ò
+        # ï¿½}ï¿½ï¿½
         if 'history_best_fitness' in data:
             self.history['best_fitness'] = data['history_best_fitness'].tolist()
             self.history['avg_fitness'] = data['history_avg_fitness'].tolist()
@@ -474,15 +482,15 @@ class VEBPopulation:
         return iter(self.individuals)
 
 
-# KÕã
+# Kï¿½ï¿½
 if __name__ == "__main__":
-    # ú*S
+    # ï¿½*S
     ind = VEBIndividual()
     print(f"Individual: {ind}")
     print(f"Q weights shape: {ind.q_weights.shape}")
     print(f"Target weights shape: {ind.target_weights.shape}")
 
-    # KÕQÜú
+    # Kï¿½Qï¿½ï¿½
     q_net = ind.create_q_network()
     target_net = ind.create_target_network()
 
@@ -492,7 +500,7 @@ if __name__ == "__main__":
     print(f"Q values shape: {q_values.shape}")
     print(f"Target values shape: {target_values.shape}")
 
-    # KÕŞ>²:
+    # Kï¿½ï¿½>ï¿½:
     buffer = ReplayBuffer(capacity=1000)
     for _ in range(100):
         s = np.random.randn(230).astype(np.float32)
@@ -507,17 +515,17 @@ if __name__ == "__main__":
     batch = buffer.sample(32)
     print(f"Batch states shape: {batch['states'].shape}")
 
-    # KÕ”¦¡—
+    # Kï¿½ï¿½ï¿½ï¿½ï¿½
     fitness = ind.compute_fitness(buffer, batch_size=32, n_batches=5)
     print(f"\nFitness (negative TD error): {fitness:.4f}")
     print(f"TD error: {ind.td_error:.4f}")
 
-    # KÕÍ¤
+    # Kï¿½Í¤
     pop = VEBPopulation(size=10)
     pop.initialize_random()
     print(f"\nPopulation size: {len(pop)}")
 
-    # ¡—@	*S”¦
+    # ï¿½ï¿½@	*Sï¿½ï¿½
     for individual in pop:
         individual.compute_fitness(buffer, batch_size=32, n_batches=3)
 
@@ -527,7 +535,7 @@ if __name__ == "__main__":
     elite = pop.get_elite(3)
     print(f"Elite fitnesses: {[e.fitness for e in elite]}")
 
-    # KÕİX/ }
+    # Kï¿½ï¿½X/ï¿½}
     pop.save("test_veb_pop.npz")
     pop2 = VEBPopulation()
     pop2.load("test_veb_pop.npz")

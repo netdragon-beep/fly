@@ -2,14 +2,14 @@
 """
 VEB-RL: Value-Evolutionary-Based Reinforcement Learning
 
-úŽº‡: Value-Evolutionary-Based Reinforcement Learning (ICML 2024)
+: Value-Evolutionary-Based Reinforcement Learning (ICML 2024)
 
-8ÃÄö:
-- QNetwork: QQÜŒDueling QQÜ
-- VEBIndividual: *S{QQÜ + îQÜ	
-- VEBPopulation: Í¤¡
-- VEBTrainer: ­Ãh+Elite Interaction, RL InjectionI	
-- ReplayBuffer: ÏŒÞ>²:
+8:
+- QNetwork: QQÜŒDueling QQ
+- VEBIndividual: *S{QQ + Q	
+- VEBPopulation: Í¤
+- VEBTrainer: h+Elite Interaction, RL InjectionI	
+- ReplayBuffer: ÏŒ>:
 """
 
 from .q_network import (
@@ -40,7 +40,7 @@ from .reward import (
 )
 
 __all__ = [
-    # QQÜ
+    # QQ
     'QNetwork',
     'DuelingQNetwork',
     'encode_q_weights',
@@ -48,15 +48,15 @@ __all__ = [
     'create_target_network',
     'soft_update',
     'hard_update',
-    # *SŒÍ¤
+    # *SÍ¤
     'VEBIndividual',
     'VEBPopulation',
     'ReplayBuffer',
-    # ­Ãh
+    # h
     'VEBTrainer',
     'GeneticOperators',
     'MockEnvironment',
-    # V±
+    # V
     'RewardConfig',
     'RewardCalculator',
 ]
