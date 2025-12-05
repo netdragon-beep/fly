@@ -26,7 +26,7 @@ import sys
 
 # y
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-CODE_ROOT = os.path.dirname(PROJECT_ROOT)
+CODE_ROOT = os.path.dirname(os.path.dirname(PROJECT_ROOT))
 DEFAULT_SAVE_DIR = os.path.join(CODE_ROOT, 'checkpoints', 'veb')
 sys.path.insert(0, PROJECT_ROOT)
 
