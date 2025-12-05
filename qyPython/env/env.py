@@ -101,6 +101,8 @@ class Env(EnvBase):
                 self.funTool.sim_data.add_or_update_track(data)
             elif fun == 'SensorTrackDropped':
                 self.funTool.sim_data.remove_track(data)
+            elif fun == 'WeaponFired':
+                self.funTool.sim_data.update_weapon_quantity(data)
             elif fun == 'AdvanceTime' or fun == 'SimulationStarting' or fun == 'SimulationComplete' or fun == 'simControl':
                 self.funTool.sim_data.update_header(data)
                 if fun == 'SimulationStarting':
@@ -142,7 +144,7 @@ def auto_engage_main(red_agent, blue_agent):
         done = [False, False, False]
         start_once = True
         while not done[0]:
-            try:
+            # try:
                 if env.funTool.s_ws is not None:
                     if not env.funTool.sim_start:
                         if start_once:
@@ -170,8 +172,8 @@ def auto_engage_main(red_agent, blue_agent):
                                     env.funTool.sim_data.frame = 0
                                     print('force step')
                         time.sleep(0.02)
-            except Exception as e:
-                print(f'执行auto_engage_main时报错：{e}')
+            # except Exception as e:
+            #     print(f'执行auto_engage_main时报错：{e}')
         print(f"推演结束:{done[0]} 红方胜利:{done[1]} 蓝方胜利:{done[2]}")
         env.funTool.sim_control('edit')
         if env.run_times <= 0:

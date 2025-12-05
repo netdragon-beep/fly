@@ -131,13 +131,19 @@ class MultiEnv(EnvBase):
 
     def run(self):
         while True:
+            start_wait_time = time.time()
+            step_wait_time = time.time()
             self.done = [False, False, False]
             start_once = True
             while not self.done[0]:
                 if self.funTool.s_ws is not None:
+                    if not start_once and not self.funTool.sim_start:
+                        if time.time() - start_wait_time > 1:
+                            start_once = True
                     if not self.funTool.sim_start:
                         if start_once:
                             time.sleep(2)
+                            start_wait_time = time.time()
                             start_once = False
                             self.funTool.set_simulation_input(0.1)
                             self.funTool.sim_control('play', 'frameStepped')
@@ -145,6 +151,7 @@ class MultiEnv(EnvBase):
                             time.sleep(0.02)
                     else:
                         if self.funTool.sim_data.frame == 0:
+                            step_wait_time = time.time()
                             if not self.wait_next_step:
                                 current_sim_data = self.funTool.sim_data.to_dict()
                                 current_sim_data['room_id'] = self.room_id
@@ -168,6 +175,9 @@ class MultiEnv(EnvBase):
                                     self.force_step_time = time.time()
                                     self.force_step()
                                 pass
+                        else:
+                            if time.time() - step_wait_time > 1:
+                                self.funTool.sim_data.frame = 0
                         time.sleep(0.02)
                 else:
                     print(f"实例{self.room_id}未初始化成功")

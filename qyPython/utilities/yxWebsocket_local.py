@@ -36,8 +36,11 @@ class YXWebSocketServerMain:
         t.start()
 
     async def async_send_to_room(self, room_id, message):
-        """您的异步发送消息函数"""
-        await self.send_to_room(room_id, message)  # 模拟异步IO操作
+
+        try:
+            await self.send_to_room(room_id, message)  # 模拟异步IO操作
+        except Exception as e:
+            print('主进程：与实例断开连接')
 
     def start_async_loop(self,loop):
         """在后台线程中启动事件循环"""
@@ -120,6 +123,14 @@ class YXWebSocketServerMain:
                     print(f"消息已发送至实例 {room_id}")
             except websockets.ConnectionClosed:
                 print(f"尝试发送时发现实例 {room_id} 的连接已断开")
-                del self.websocket_clients[room_id]
+                async with self.lock:
+                    if room_id in self.websocket_clients:
+                        del self.websocket_clients[room_id]
+                        logger.info(f"已移除房间 {room_id} 的客户端")
+                # 清理相关状态
+                with self.dict_lock:
+                    self.wait_dict.pop(room_id, None)
+                    self.sim_data_dict.pop(room_id, None)
+                # del self.websocket_clients[room_id]
         else:
             print(f"实例 {room_id} 未找到活跃连接")

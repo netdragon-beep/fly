@@ -395,7 +395,7 @@ class SimData:
         self.id_name_dict = {}
         self.rate_list = [0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
         self.current_rate = 1
-        self.frame = 1
+        self.frame = 0
         self.user_side = 'red'
 
     def set_user_side(self, user_side):

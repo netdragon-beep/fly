@@ -371,7 +371,7 @@ class VEBTrainer:
         self,
         env_step_func: Callable,
         env_reset_func: Callable
-    ):
+    ) -> List[float]:
         """
         Elite Interaction
 
@@ -383,6 +383,7 @@ class VEBTrainer:
         """
         # ־*S
         elites = self.population.get_elite(self.elite_size)
+        elite_returns: List[float] = []
 
         for elite in elites:
             #  Q Q
@@ -424,13 +425,16 @@ class VEBTrainer:
                 self.total_episodes += 1
 
             # *Sߡ
-            elite.episode_return = total_return / self.episodes_per_elite
+            elite.episode_return = total_return / max(1, self.episodes_per_elite)
+            elite_returns.append(elite.episode_return)
 
         # p epsilon
         self.epsilon = max(
             self.epsilon_end,
             self.epsilon * self.epsilon_decay
         )
+
+        return elite_returns
 
     def evaluate_fitness(self):
         """
@@ -619,8 +623,9 @@ class VEBTrainer:
             gen_start = datetime.now()
 
             # 1. Elite Interaction - *S
+            elite_returns: List[float] = []
             if env_step_func is not None and env_reset_func is not None:
-                self.elite_interaction(env_step_func, env_reset_func)
+                elite_returns = self.elite_interaction(env_step_func, env_reset_func)
 
             # 2. Evaluate Fitness - 0@	*STD	
             self.evaluate_fitness()
@@ -646,11 +651,19 @@ class VEBTrainer:
 
             # 
             if (gen + 1) % self.log_freq == 0:
+                if elite_returns:
+                    best_ret = max(elite_returns)
+                    import numpy as _np
+                    avg_ret = float(_np.mean(elite_returns))
+                else:
+                    best_ret = stats['best_return']
+                    avg_ret = stats['avg_return']
                 print(f"\nGeneration {gen + 1}/{self.generations}")
                 print(f"  Best fitness: {stats['best_fitness']:.4f}")
                 print(f"  Avg fitness:  {stats['avg_fitness']:.4f}")
                 print(f"  Best TD error: {stats['best_td_error']:.4f}")
-                print(f"  Best return:  {stats['best_return']:.2f}")
+                print(f"  Best return:  {best_ret:.2f}")
+                print(f"  Avg return:   {avg_ret:.2f}")
                 print(f"  RL loss: {rl_loss:.4f}")
                 print(f"  Buffer size: {len(self.replay_buffer)}")
                 print(f"  Epsilon: {self.epsilon:.4f}")

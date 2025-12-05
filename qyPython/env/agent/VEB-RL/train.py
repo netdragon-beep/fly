@@ -26,6 +26,8 @@ import sys
 
 # y
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+CODE_ROOT = os.path.dirname(PROJECT_ROOT)
+DEFAULT_SAVE_DIR = os.path.join(CODE_ROOT, 'checkpoints', 'veb')
 sys.path.insert(0, PROJECT_ROOT)
 
 from veb_trainer import VEBTrainer, MockEnvironment
@@ -111,8 +113,8 @@ def parse_args():
     # v
     parser.add_argument('--device', type=str, default='auto',
                         help='Device: auto/cpu/cuda (default: auto)')
-    parser.add_argument('--save-dir', type=str, default='./checkpoints/veb',
-                        help='Save directory (default: ./checkpoints/veb)')
+    parser.add_argument('--save-dir', type=str, default=DEFAULT_SAVE_DIR,
+                        help=f'Save directory (default: {DEFAULT_SAVE_DIR})')
     parser.add_argument('--resume', type=str, default=None,
                         help='Resume from checkpoint path')
     parser.add_argument('--log-freq', type=int, default=1,
