@@ -3,6 +3,8 @@ from env.env import auto_engage_main, teaming_engage_main
 from env.multi_env import auto_engage_main_multi
 from env.agent.demo.demo_auto_agent import DemoAutoAgent
 from env.agent.demo.demo_teaming_agent import DemoTeamingAgent
+# from env.agent.test1.test1_auto_agent import FlyTeamAutoAgent
+# from env.agent.test1.test1_teaming_agent import FlyTeamTeamingAgent
 from utilities.yxHttp import YxHttpRequest as yxHttp
 
 if __name__ == '__main__':
@@ -12,6 +14,7 @@ if __name__ == '__main__':
         # 机器竞技模式
         red_agent = DemoAutoAgent('red', "red_demo")
         blue_agent = DemoAutoAgent('blue', "blue_demo")
+        # # 新智能体
         if config.is_single_instance:
             auto_engage_main(red_agent, blue_agent)
         else:
@@ -20,4 +23,7 @@ if __name__ == '__main__':
         # 人机混合编组竞技模式
         red_agent = DemoTeamingAgent('red', "red_demo")
         blue_agent = DemoAutoAgent('blue', "blue_demo")
+        # # 新智能体
+        # red_agent = FlyTeamTeamingAgent('red', "red_demo")
+        # blue_agent = FlyTeamAutoAgent('blue', "blue_demo")
         teaming_engage_main(red_agent, blue_agent)

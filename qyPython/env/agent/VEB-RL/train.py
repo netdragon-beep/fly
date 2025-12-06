@@ -47,22 +47,22 @@ def parse_args():
                         help='Use real simulation environment')
 
     # ͤp
-    parser.add_argument('--population', type=int, default=50,
-                        help='Population size (default: 50)')
+    parser.add_argument('--population', type=int, default=100,
+                        help='Population size (default: 100)')
     parser.add_argument('--generations', type=int, default=100,
                         help='Number of generations (default: 100)')
 
     # VEB-RL 8p
-    parser.add_argument('--elite-size', type=int, default=10,
-                        help='Number of elite individuals N for interaction (default: 10)')
-    parser.add_argument('--target-update-freq', type=int, default=10,
-                        help='Target network update frequency H in generations (default: 10)')
+    parser.add_argument('--elite-size', type=int, default=20,
+                        help='Number of elite individuals N for interaction (default: 20)')
+    parser.add_argument('--target-update-freq', type=int, default=5,
+                        help='Target network update frequency H in generations (default: 5)')
     parser.add_argument('--gamma', type=float, default=0.99,
                         help='Discount factor (default: 0.99)')
 
     # W p
-    parser.add_argument('--elite-ratio', type=float, default=0.1,
-                        help='Elite ratio for evolution (default: 0.1)')
+    parser.add_argument('--elite-ratio', type=float, default=0.15,
+                        help='Elite ratio for evolution (default: 0.15)')
     parser.add_argument('--crossover-prob', type=float, default=0.8,
                         help='Crossover probability (default: 0.8)')
     parser.add_argument('--mutation-prob', type=float, default=0.1,
@@ -73,24 +73,24 @@ def parse_args():
     # RL p
     parser.add_argument('--rl-lr', type=float, default=1e-3,
                         help='RL Q network learning rate (default: 1e-3)')
-    parser.add_argument('--rl-batch-size', type=int, default=256,
-                        help='RL batch size (default: 256)')
-    parser.add_argument('--rl-updates', type=int, default=100,
-                        help='RL updates per generation (default: 100)')
-    parser.add_argument('--buffer-capacity', type=int, default=100000,
-                        help='Replay buffer capacity (default: 100000)')
+    parser.add_argument('--rl-batch-size', type=int, default=768,
+                        help='RL batch size (default: 768)')
+    parser.add_argument('--rl-updates', type=int, default=250,
+                        help='RL updates per generation (default: 250)')
+    parser.add_argument('--buffer-capacity', type=int, default=200000,
+                        help='Replay buffer capacity (default: 200000)')
 
     # p
-    parser.add_argument('--episodes-per-elite', type=int, default=3,
-                        help='Episodes per elite individual (default: 3)')
+    parser.add_argument('--episodes-per-elite', type=int, default=4,
+                        help='Episodes per elite individual (default: 4)')
     parser.add_argument('--max-episode-steps', type=int, default=1000,
                         help='Max steps per episode (default: 1000)')
     parser.add_argument('--epsilon-start', type=float, default=1.0,
                         help='Initial epsilon for exploration (default: 1.0)')
     parser.add_argument('--epsilon-end', type=float, default=0.01,
                         help='Final epsilon (default: 0.01)')
-    parser.add_argument('--epsilon-decay', type=float, default=0.995,
-                        help='Epsilon decay rate per generation (default: 0.995)')
+    parser.add_argument('--epsilon-decay', type=float, default=0.99,
+                        help='Epsilon decay rate per generation (default: 0.99)')
 
     # Qp
     parser.add_argument('--state-dim', type=int, default=230,
