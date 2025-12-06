@@ -80,6 +80,7 @@ class Env(EnvBase):
                         on_close=self.on_scenario_close
                     )
                     self.funTool.set_scenario_ws(self.scenario_ws)
+                    self._sync_battlefield_bounds()
             elif fun == 'brokenPlatform':
                 if 'list' in data:
                     tlist = data['list']

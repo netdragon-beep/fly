@@ -47,6 +47,7 @@ class MultiEnv(EnvBase):
 
         if self.web_server is not None:
             self.funTool.set_scenario_ws(self.web_server)
+            self._sync_battlefield_bounds()
         else:
             print("推演服务器连接错误！！！")
 
