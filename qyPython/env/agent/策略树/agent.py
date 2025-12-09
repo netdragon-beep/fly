@@ -197,3 +197,19 @@ class BTDemoAgent(AutoAgentBase):
             right_dist_to_center = abs(right_target_lat - self.center_lat) + abs(right_target_lon - self.center_lon)
 
             return evade_left if left_dist_to_center < right_dist_to_center else evade_right
+
+    def save_battle_data(self):
+        """
+        保存战斗数据（击杀/脱靶记录）
+
+        在战斗结束后调用此方法保存收集的数据
+        用于后续分析和拟合致死区间模型
+        """
+        ActionAttackLogic.save_kill_data(self)
+
+    def print_battle_summary(self):
+        """打印战斗数据统计摘要"""
+        if hasattr(self, 'kill_data_records') and self.kill_data_records:
+            ActionAttackLogic.print_kill_data_summary(self.kill_data_records)
+        else:
+            print("[战斗摘要] 没有收集到导弹数据")

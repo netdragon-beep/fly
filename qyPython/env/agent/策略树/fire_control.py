@@ -36,10 +36,14 @@ class SmartFireControl:
     UAV_OPTIMAL_RANGE = 10000      # 最优射程 10km
     UAV_MISSILE_SPEED = 800        # 导弹速度 m/s
 
-    # === 开火阈值 ===
-    PK_THRESHOLD_NORMAL = 0.5      # 正常情况下的Pk阈值
-    PK_THRESHOLD_URGENT = 0.35     # 紧急情况（目标逃跑）的Pk阈值
-    PK_THRESHOLD_HIGH_VALUE = 0.4  # 高价值目标（有人机）的Pk阈值
+    # === 开火阈值 (v1: 原始版本) ===
+    PK_THRESHOLD_NORMAL = 0.45     # 正常情况下的Pk阈值
+    PK_THRESHOLD_URGENT = 0.40     # 紧急情况的Pk阈值
+    PK_THRESHOLD_HIGH_VALUE = 0.40 # 高价值目标（有人机）的Pk阈值
+
+    # === 姿态角限制 ===
+    MAX_ASPECT_FOR_NEZ_FIRE = 70   # NEZ内开火最大姿态角（超过70°不建议开火）
+    MAX_ASPECT_FOR_FLEEING = 90    # 目标逃跑时最大姿态角
 
     # === 调试开关 ===
     DEBUG_ENABLED = True
@@ -132,11 +136,10 @@ class SmartFireControl:
         """
         估算命中概率 (Pk - Kill Probability)
 
-        影响因素：
-        1. 距离因子 - 越近越好，但有最优距离
-        2. 姿态因子 - 迎头最佳，尾追最差
-        3. 接近率因子 - 接近时更好
-        4. 目标类型因子 - 有人机更大更容易命中
+        v1版本：原始简单模型
+        - 均匀的姿态因子分布
+        - 简单的接近率判断
+        - 基于NEZ的距离因子
 
         返回: 0.0 - 1.0 的概率值
         """
@@ -153,33 +156,48 @@ class SmartFireControl:
         if distance > max_range:
             range_factor = 0.0
         elif distance <= nez:
-            # 在NEZ内，高命中率
-            range_factor = 0.9 + 0.1 * (1 - distance / nez)
+            # NEZ内：高命中率
+            range_factor = 0.90
         elif distance <= optimal_range:
-            # 在最优范围内
-            range_factor = 0.7 + 0.2 * (1 - (distance - nez) / (optimal_range - nez))
+            # 最优射程内：较高
+            range_factor = 0.80
         else:
-            # 最优范围到最大射程之间，命中率快速下降
-            range_factor = 0.7 * (1 - (distance - optimal_range) / (max_range - optimal_range)) ** 2
+            # 远距离：线性衰减
+            range_factor = 0.70 * (1 - (distance - optimal_range) / (max_range - optimal_range))
 
-        # 2. 姿态因子 (0.3 - 1.0)
-        # 迎头(0°) = 1.0, 尾追(180°) = 0.3
-        aspect_factor = 1.0 - 0.7 * (aspect_angle / 180.0)
+        # 2. 姿态因子 - v1简单版本（更均匀）
+        if aspect_angle < 30:
+            # 迎头：最佳
+            aspect_factor = 1.0
+        elif aspect_angle < 60:
+            # 前侧方
+            aspect_factor = 0.90
+        elif aspect_angle < 90:
+            # 横越
+            aspect_factor = 0.85
+        elif aspect_angle < 120:
+            # 后侧方
+            aspect_factor = 0.80
+        else:
+            # 尾追
+            aspect_factor = 0.75
 
-        # 3. 接近率因子 (0.5 - 1.2)
-        # 快速接近加成，远离惩罚
-        if closure_rate > 200:  # 快速接近 (>200 m/s)
-            closure_factor = 1.2
-        elif closure_rate > 0:  # 缓慢接近
-            closure_factor = 1.0 + 0.2 * (closure_rate / 200)
-        elif closure_rate > -100:  # 缓慢远离
-            closure_factor = 0.8 + 0.2 * (1 + closure_rate / 100)
-        else:  # 快速远离
-            closure_factor = 0.5
+        # 3. 接近率因子 - v1简单版本
+        if closure_rate < 0:
+            # 远离：惩罚
+            closure_factor = 0.70
+        elif closure_rate < 200:
+            # 慢速接近
+            closure_factor = 0.90
+        elif closure_rate < 400:
+            # 中速接近：最佳
+            closure_factor = 1.0
+        else:
+            # 高速接近
+            closure_factor = 0.95
 
         # 4. 目标类型因子
-        # 有人机目标更大，稍微容易命中
-        target_factor = 1.1 if target_is_manned else 1.0
+        target_factor = 1.0
 
         # 综合Pk
         pk = range_factor * aspect_factor * closure_factor * target_factor
@@ -193,6 +211,10 @@ class SmartFireControl:
     def should_fire(cls, shooter, target, agent, debug_prefix=""):
         """
         综合判断是否应该开火
+
+        v1版本：简单直接的Pk阈值判断
+        - 无复杂的危险区检测
+        - 基于Pk阈值的简单决策
 
         返回: (should_fire: bool, pk: float, reason: str)
         """
@@ -236,30 +258,19 @@ class SmartFireControl:
         # 计算Pk
         pk = cls.calculate_pk(distance, aspect_angle, closure_rate, is_manned, target_is_manned)
 
-        # === 开火决策逻辑 ===
+        # === v1开火决策逻辑：简单版 ===
 
-        # 情况1: 在NEZ内，高优先级开火
-        if distance <= nez:
-            if pk >= cls.PK_THRESHOLD_URGENT:
-                return True, pk, f"NEZ内(d={distance:.0f}m)"
+        # 1. 在NEZ内且Pk达标：优先开火
+        if distance <= nez and pk >= cls.PK_THRESHOLD_URGENT:
+            return True, pk, f"NEZ内(d={distance:.0f}m,pk={pk:.2f})"
 
-        # 情况2: 目标是高价值目标（有人机）
-        if target_is_manned:
-            if pk >= cls.PK_THRESHOLD_HIGH_VALUE:
-                return True, pk, f"高价值目标(Pk={pk:.2f})"
+        # 2. 高价值目标（有人机）：降低阈值
+        if target_is_manned and pk >= cls.PK_THRESHOLD_HIGH_VALUE:
+            return True, pk, f"高价值目标(pk={pk:.2f})"
 
-        # 情况3: 目标正在逃跑且有一定命中率
-        if closure_rate < -50:  # 目标在逃跑
-            if pk >= cls.PK_THRESHOLD_URGENT:
-                return True, pk, f"目标逃跑(cr={closure_rate:.0f})"
-
-        # 情况4: 正常情况，Pk达到阈值
+        # 3. 正常情况：Pk达到阈值即开火
         if pk >= cls.PK_THRESHOLD_NORMAL:
-            return True, pk, f"正常开火(Pk={pk:.2f})"
-
-        # 情况5: 目标正在接近，等待更好时机
-        if closure_rate > 100:
-            return False, pk, f"等待接近(cr={closure_rate:.0f})"
+            return True, pk, f"正常开火(pk={pk:.2f})"
 
         # 默认不开火
         return False, pk, f"Pk不足({pk:.2f}<{cls.PK_THRESHOLD_NORMAL})"

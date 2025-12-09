@@ -53,7 +53,7 @@ class ActionEvadeMissiles(Action):
     BOUNDARY_MARGIN = 0.12          # 边界安全边距（约13km）
 
     # === 调试 ===
-    DEBUG_ENABLED = True
+    DEBUG_ENABLED = False  # 关闭规避调试
     DEBUG_INTERVAL = 20
 
     def tick(self, agent) -> str:

@@ -22,11 +22,15 @@ class ActionAttackLogic(Action):
 
     # 调试开关
     DEBUG_ENABLED = True
-    DEBUG_INTERVAL = 25  # 每N帧输出一次火控信息
+    DEBUG_INTERVAL = 10  # 每N帧输出一次火控信息（更频繁）
 
     # Shoot-Look-Shoot 参数
     MISSILE_FLIGHT_TIME_ESTIMATE = 80  # 估计导弹飞行时间（帧），约8秒@10fps
     MIN_REFIRE_INTERVAL = 40           # 最小再次发射间隔（帧），约4秒
+    MAX_PENDING_MISSILES_PER_TARGET = 1  # 每个目标最多同时有N枚待定导弹（防止多射手浪费）
+
+    # 数据收集开关（用于拟合致死区间模型）
+    COLLECT_KILL_DATA = True
 
     def tick(self, agent) -> str:
         if not agent.enemy_units:
@@ -35,6 +39,12 @@ class ActionAttackLogic(Action):
         # === 初始化 Shoot-Look-Shoot 追踪器 ===
         if not hasattr(agent, 'pending_missiles'):
             agent.pending_missiles = {}  # {(shooter_name, target_id): launch_frame}
+
+        # === 初始化导弹参数数据收集器（用于拟合致死区间模型）===
+        if not hasattr(agent, 'missile_launch_data'):
+            agent.missile_launch_data = {}  # {(shooter_name, target_id): {launch_params...}}
+        if not hasattr(agent, 'kill_data_records'):
+            agent.kill_data_records = []  # [{...params, result: 'kill'/'miss'/'timeout'}]
 
         # === 清理已过期的待定导弹记录 ===
         # 如果发射时间已超过预计飞行时间，认为导弹已到达（命中或脱靶）
@@ -45,7 +55,17 @@ class ActionAttackLogic(Action):
         for key in expired_keys:
             del agent.pending_missiles[key]
             if self.DEBUG_ENABLED:
-                print(f"[Shoot-Look-Shoot] 导弹追踪过期: {key[0]} -> 目标{key[1]}")
+                print(f"[导弹超时] {key[0]}的导弹飞行超时(可能脱靶) -> 目标{key[1]}")
+
+            # === 数据收集：记录超时（脱靶）===
+            if self.COLLECT_KILL_DATA and key in agent.missile_launch_data:
+                record = agent.missile_launch_data.pop(key)
+                record['result'] = 'timeout'
+                record['flight_frames'] = agent.frame_count - record['launch_frame']
+                agent.kill_data_records.append(record)
+                print(f"[数据收集] 脱靶: dist={record['distance']:.0f}m, "
+                      f"aspect={record['aspect_angle']:.1f}°, "
+                      f"closure={record['closure_rate']:.1f}m/s, Pk={record['pk']:.2f}")
 
         # === 检查己方导弹状态（如果有的话）===
         # 通过检测目标是否还存在来判断导弹是否命中
@@ -60,10 +80,36 @@ class ActionAttackLogic(Action):
             shooter_name, target_id = key
             if target_id not in current_enemy_ids:
                 keys_to_remove.append(key)
+                elapsed = agent.frame_count - agent.pending_missiles[key]
                 if self.DEBUG_ENABLED:
-                    print(f"[Shoot-Look-Shoot] 目标{target_id}已被击落，{shooter_name}可再次开火")
+                    print(f"\n{'*'*40}")
+                    print(f"[命中!!!] {shooter_name}的导弹命中目标!")
+                    print(f"  目标ID: {target_id}")
+                    print(f"  飞行时间: {elapsed}帧")
+                    print(f"{'*'*40}")
+
+                # === 数据收集：记录击杀 ===
+                if self.COLLECT_KILL_DATA and key in agent.missile_launch_data:
+                    record = agent.missile_launch_data.pop(key)
+                    record['result'] = 'kill'
+                    record['flight_frames'] = elapsed
+                    # 估算导弹实际飞行距离和命中时的相对距离
+                    flight_time_sec = elapsed * 0.1  # 假设10fps
+                    missile_speed = record.get('missile_speed', 800)
+                    combined_speed = record.get('combined_speed', missile_speed)
+                    record['est_flight_distance'] = flight_time_sec * missile_speed
+                    record['est_intercept_distance'] = record['distance'] - flight_time_sec * combined_speed
+                    agent.kill_data_records.append(record)
+                    print(f"[数据收集] 击杀! dist={record['distance']:.0f}m, "
+                          f"aspect={record['aspect_angle']:.1f}°, "
+                          f"closure={record['closure_rate']:.1f}m/s, Pk={record['pk']:.2f}, "
+                          f"飞行={elapsed}帧, 估算拦截距离={record['est_intercept_distance']:.0f}m")
+
         for key in keys_to_remove:
             del agent.pending_missiles[key]
+            # 清理launch_data中的残留（如果还有的话）
+            if key in agent.missile_launch_data:
+                del agent.missile_launch_data[key]
 
         # 调试帧计数
         if not hasattr(agent, '_fire_control_debug_frame'):
@@ -121,17 +167,53 @@ class ActionAttackLogic(Action):
         cur_round_shots = {}  # 本轮发射记录
         fired_units = set()   # 本轮已开火的单位
 
-        # 调试输出
-        if self.DEBUG_ENABLED and should_debug and fire_candidates:
-            print(f"\n[智能火控] Frame {agent.frame_count}: 评估 {len(fire_candidates)} 个射击方案")
-            print(f"  待定导弹数: {len(agent.pending_missiles)}")
-            # 输出前5个最佳方案
-            for i, cand in enumerate(fire_candidates[:5]):
-                unit_name = cand['unit']['name']
-                enemy_name = cand['enemy'].get('target_name', cand['enemy'].get('name', '?'))
-                print(f"  方案{i+1}: {unit_name} -> {enemy_name}, "
-                      f"Pk={cand['pk']:.2f}, 距离={cand['dist']:.0f}m, "
-                      f"决策={cand['should_fire']}, 原因={cand['reason']}")
+        # 调试输出 - 详细火控信息
+        if self.DEBUG_ENABLED and should_debug:
+            print(f"\n{'='*60}")
+            print(f"[火控系统] Frame {agent.frame_count}")
+            print(f"{'='*60}")
+
+            # 己方单位弹药状态
+            print(f"[己方单位弹药状态]")
+            for unit in agent.own_units:
+                ammo_count = 0
+                for weapon in unit.get('weapons', []):
+                    ammo_count += weapon.get('quantity', 0)
+                print(f"  {unit['name']}: 剩余弹药={ammo_count}")
+
+            # 敌方单位状态
+            print(f"[敌方单位] 共 {len(agent.enemy_units)} 个")
+            for enemy in agent.enemy_units:
+                e_name = enemy.get('target_name', enemy.get('name', '?'))
+                e_type = enemy.get('platform_entity_type', '?')
+                e_fired = enemy.get('is_fired_num', 0)
+                print(f"  {e_name} ({e_type}): 已被攻击{e_fired}次")
+
+            # 待定导弹（按目标分组显示）
+            print(f"[待定导弹] 共 {len(agent.pending_missiles)} 枚 (每目标限制: {self.MAX_PENDING_MISSILES_PER_TARGET}枚)")
+            # 按目标分组
+            missiles_by_target = {}
+            for key, frame in agent.pending_missiles.items():
+                shooter_name, target_id = key
+                if target_id not in missiles_by_target:
+                    missiles_by_target[target_id] = []
+                missiles_by_target[target_id].append((shooter_name, frame))
+            for target_id, missiles in missiles_by_target.items():
+                print(f"  目标{target_id}: {len(missiles)}枚导弹在途")
+                for shooter_name, frame in missiles:
+                    elapsed = agent.frame_count - frame
+                    print(f"    - {shooter_name}: 已飞行{elapsed}帧")
+
+            # 射击方案评估
+            if fire_candidates:
+                print(f"[射击方案评估] 共 {len(fire_candidates)} 个")
+                for i, cand in enumerate(fire_candidates[:8]):
+                    unit_name = cand['unit']['name']
+                    enemy_name = cand['enemy'].get('target_name', cand['enemy'].get('name', '?'))
+                    status = "✓开火" if cand['should_fire'] else "✗等待"
+                    print(f"  {i+1}. {unit_name} -> {enemy_name}: "
+                          f"Pk={cand['pk']:.2f}, 距离={cand['dist']/1000:.1f}km, "
+                          f"{status}, {cand['reason']}")
 
         for cand in fire_candidates:
             u, e = cand['unit'], cand['enemy']
@@ -148,7 +230,17 @@ class ActionAttackLogic(Action):
             target_id = e.get('target_id', e.get('id', id(e)))
 
             # === Shoot-Look-Shoot 检查 ===
-            # 检查该射手是否已有导弹正在飞向该目标
+
+            # 检查1: 该目标已有多少枚待定导弹（来自所有射手）
+            missiles_to_target = sum(1 for key in agent.pending_missiles if key[1] == target_id)
+            if missiles_to_target >= self.MAX_PENDING_MISSILES_PER_TARGET:
+                if self.DEBUG_ENABLED and should_debug:
+                    shooters = [key[0] for key in agent.pending_missiles if key[1] == target_id]
+                    print(f"  [全局限制] 目标{target_id}已有{missiles_to_target}枚导弹在途 "
+                          f"(射手: {', '.join(shooters)}), {u['name']}跳过")
+                continue
+
+            # 检查2: 该射手是否已有导弹正在飞向该目标
             pending_key = (u['name'], target_id)
             if pending_key in agent.pending_missiles:
                 launch_frame = agent.pending_missiles[pending_key]
@@ -179,9 +271,59 @@ class ActionAttackLogic(Action):
                 # === 记录 Shoot-Look-Shoot 追踪 ===
                 agent.pending_missiles[pending_key] = agent.frame_count
 
+                # === 收集发射时的详细参数 ===
+                u_lon = u.get('longitude', 0)
+                u_lat = u.get('latitude', 0)
+                e_lon = e.get('longitude', 0)
+                e_lat = e.get('latitude', 0)
+
+                aspect = SmartFireControl.calculate_aspect_angle(
+                    u_lon, u_lat, u.get('heading', 0),
+                    e_lon, e_lat, e.get('heading', 0)
+                )
+                closure = SmartFireControl.calculate_closure_rate(
+                    u_lon, u_lat, u.get('speed', 300), u.get('heading', 0),
+                    e_lon, e_lat, e.get('speed', 300), e.get('heading', 0)
+                )
+                is_manned = u.get('type') == '有人机'
+                target_is_manned = e.get('platform_entity_type') == '有人机'
+                nez = SmartFireControl.calculate_nez(is_manned, aspect)
+
+                # === 数据收集：记录发射参数 ===
+                if self.COLLECT_KILL_DATA:
+                    # 估算导弹飞行距离（用于分析伤害衰减）
+                    # 无人机导弹速度约800m/s，有人机约900m/s
+                    missile_speed = 900 if is_manned else 800
+
+                    agent.missile_launch_data[pending_key] = {
+                        'launch_frame': agent.frame_count,
+                        'shooter_name': u['name'],
+                        'shooter_type': u.get('type', '无人机'),
+                        'target_id': target_id,
+                        'target_name': target_name,
+                        'target_type': e.get('platform_entity_type', '无人机'),
+                        'distance': cand['dist'],
+                        'aspect_angle': aspect,
+                        'closure_rate': closure,
+                        'pk': cand['pk'],
+                        'nez': nez,
+                        'in_nez': cand['dist'] <= nez,
+                        'shooter_speed': u.get('speed', 300),
+                        'target_speed': e.get('speed', 300),
+                        'shooter_alt': u.get('altitude', 3000),
+                        'target_alt': e.get('altitude', 3000),
+                        # 新增：用于分析伤害衰减
+                        'missile_speed': missile_speed,
+                        'altitude_diff': abs(u.get('altitude', 3000) - e.get('altitude', 3000)),
+                        'combined_speed': closure + missile_speed,  # 导弹相对目标的逼近速度
+                    }
+
                 if self.DEBUG_ENABLED:
-                    print(f"[开火] {u['name']} -> {target_name}, Pk={cand['pk']:.2f}, "
-                          f"距离={cand['dist']:.0f}m, 原因={cand['reason']}")
+                    print(f"\n[开火!!!] {u['name']} -> {target_name}")
+                    print(f"  距离: {cand['dist']/1000:.2f}km, NEZ: {nez/1000:.2f}km")
+                    print(f"  姿态角: {aspect:.1f}° (0=迎头, 180=尾追)")
+                    print(f"  接近率: {closure:.1f}m/s (正=接近, 负=远离)")
+                    print(f"  Pk: {cand['pk']:.2f}, 原因: {cand['reason']}")
 
         # Sub-step 2: Maneuver to Attack (仅对未被占用的单位有效)
         for unit in agent.own_units:
@@ -238,3 +380,90 @@ class ActionAttackLogic(Action):
                 agent.add_action(decCmd.fly_to_point(unit['name'], target_pt, approach_speed), unit['name'])
 
         return NodeStatus.SUCCESS
+
+    @classmethod
+    def save_kill_data(cls, agent, filepath=None):
+        """
+        保存击杀数据到文件（用于后续分析和拟合模型）
+
+        Args:
+            agent: 包含kill_data_records的agent实例
+            filepath: 保存路径，默认为当前目录下的kill_data_v1.json
+        """
+        import json
+        import os
+
+        if not hasattr(agent, 'kill_data_records') or not agent.kill_data_records:
+            print("[数据收集] 没有收集到数据")
+            return
+
+        if filepath is None:
+            # v1版本数据文件
+            filepath = os.path.join(os.path.dirname(__file__), '..', 'kill_data_v1.json')
+
+        # 读取已有数据（如果存在）
+        existing_data = []
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+            except:
+                existing_data = []
+
+        # 添加新数据
+        existing_data.extend(agent.kill_data_records)
+
+        # 保存
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(existing_data, f, ensure_ascii=False, indent=2)
+
+        print(f"[数据收集] 保存了 {len(agent.kill_data_records)} 条记录到 {filepath}")
+        print(f"[数据收集] 总共 {len(existing_data)} 条记录")
+
+        # 打印统计
+        cls.print_kill_data_summary(agent.kill_data_records)
+
+    @classmethod
+    def print_kill_data_summary(cls, records):
+        """打印击杀数据统计摘要"""
+        if not records:
+            return
+
+        kills = [r for r in records if r['result'] == 'kill']
+        misses = [r for r in records if r['result'] in ('timeout', 'miss')]
+
+        print(f"\n{'='*60}")
+        print(f"[致死区间分析] 共 {len(records)} 条数据")
+        print(f"{'='*60}")
+        print(f"击杀: {len(kills)} ({100*len(kills)/len(records):.1f}%)")
+        print(f"脱靶: {len(misses)} ({100*len(misses)/len(records):.1f}%)")
+
+        if kills:
+            avg_kill_dist = sum(r['distance'] for r in kills) / len(kills)
+            avg_kill_aspect = sum(r['aspect_angle'] for r in kills) / len(kills)
+            avg_kill_closure = sum(r['closure_rate'] for r in kills) / len(kills)
+            avg_kill_pk = sum(r['pk'] for r in kills) / len(kills)
+            in_nez_kills = sum(1 for r in kills if r['in_nez'])
+
+            print(f"\n[击杀条件统计]")
+            print(f"  平均距离: {avg_kill_dist/1000:.2f} km")
+            print(f"  平均姿态角: {avg_kill_aspect:.1f}°")
+            print(f"  平均接近率: {avg_kill_closure:.1f} m/s")
+            print(f"  平均Pk: {avg_kill_pk:.2f}")
+            print(f"  在NEZ内: {in_nez_kills}/{len(kills)} ({100*in_nez_kills/len(kills):.1f}%)")
+
+        if misses:
+            avg_miss_dist = sum(r['distance'] for r in misses) / len(misses)
+            avg_miss_aspect = sum(r['aspect_angle'] for r in misses) / len(misses)
+            avg_miss_closure = sum(r['closure_rate'] for r in misses) / len(misses)
+            avg_miss_pk = sum(r['pk'] for r in misses) / len(misses)
+            in_nez_misses = sum(1 for r in misses if r['in_nez'])
+
+            print(f"\n[脱靶条件统计]")
+            print(f"  平均距离: {avg_miss_dist/1000:.2f} km")
+            print(f"  平均姿态角: {avg_miss_aspect:.1f}°")
+            print(f"  平均接近率: {avg_miss_closure:.1f} m/s")
+            print(f"  平均Pk: {avg_miss_pk:.2f}")
+            print(f"  在NEZ内: {in_nez_misses}/{len(misses)} ({100*in_nez_misses/len(misses):.1f}%)")
+
+        print(f"{'='*60}\n")
