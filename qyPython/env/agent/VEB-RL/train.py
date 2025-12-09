@@ -209,7 +209,7 @@ def main():
         env_step = env.step
         env_reset = env.reset
 
-    # SpMn
+    # 打印配置信息
     print(f"\nConfiguration:")
     print(f"  Population size: {args.population}")
     print(f"  Elite size (N): {args.elite_size}")
@@ -220,28 +220,35 @@ def main():
     print(f"  Device: {trainer.device}")
     print(f"  Save dir: {args.save_dir}")
 
-    # ˭
+    # 开始训练
     print("\nStarting training...")
-    best_individual = trainer.train(
-        env_step_func=env_step,
-        env_reset_func=env_reset
-    )
+    try:
+        best_individual = trainer.train(
+            env_step_func=env_step,
+            env_reset_func=env_reset
+        )
 
-    # SpӜ
-    print("\n" + "=" * 60)
-    print("VEB-RL Training Complete!")
-    print("=" * 60)
-    print(f"Best fitness (negative TD error): {best_individual.fitness:.4f}")
-    print(f"Best TD error: {best_individual.td_error:.4f}")
-    print(f"Best episode return: {best_individual.episode_return:.2f}")
-    print(f"Total steps: {trainer.total_steps}")
-    print(f"Total episodes: {trainer.total_episodes}")
-    print(f"Checkpoints saved to: {args.save_dir}")
-    print("=" * 60)
-
-    # s
-    if hasattr(env, 'close'):
-        env.close()
+        # 打印训练结果
+        print("\n" + "=" * 60)
+        print("VEB-RL Training Complete!")
+        print("=" * 60)
+        print(f"Best fitness (negative TD error): {best_individual.fitness:.4f}")
+        print(f"Best TD error: {best_individual.td_error:.4f}")
+        print(f"Best episode return: {best_individual.episode_return:.2f}")
+        print(f"Total steps: {trainer.total_steps}")
+        print(f"Total episodes: {trainer.total_episodes}")
+        print(f"Checkpoints saved to: {args.save_dir}")
+        print("=" * 60)
+    except KeyboardInterrupt:
+        print("\n[Train] 训练被用户中断")
+    except Exception as e:
+        print(f"\n[Train] 训练过程中发生错误: {e}")
+        raise
+    finally:
+        # 确保任何情况下都关闭环境，释放资源
+        if hasattr(env, 'close'):
+            print("[Train] 正在关闭环境...")
+            env.close()
 
 
 if __name__ == "__main__":

@@ -397,21 +397,28 @@ class VEBTrainer:
                 episode_return = 0.0
 
                 for step in range(self.max_episode_steps):
-                    # epsilon-greedy \	
-                    state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-
-                    if np.random.random() < self.epsilon:
-                        action = np.random.randint(0, self.action_dim)
-                    else:
-                        with torch.no_grad():
-                            q_values = q_net(state_tensor)
-                            action = q_values.argmax(dim=-1).item()
-
-                    # 
-                    next_state, reward, done, info = env_step_func(action)
-
-                    # Xl
-                    self.replay_buffer.add(state, action, reward, next_state, done)
+                    # 多智能体动作选择
+                    state_tensor = torch.FloatTensor(state).to(self.device)
+                    
+                    # 使用多智能体动作选择方法
+                    multi_actions = q_net.get_multi_agent_actions(
+                        state_tensor,
+                        num_agents=5,
+                        actions_per_agent=12,
+                        epsilon=self.epsilon
+                    )
+                    
+                    # 转换为numpy数组
+                    if isinstance(multi_actions, torch.Tensor):
+                        multi_actions = multi_actions.cpu().numpy()
+                    
+                    # 执行多智能体动作
+                    next_state, reward, done, info = env_step_func(multi_actions)
+                    
+                    # 存储经验（使用组合动作索引，兼容replay buffer）
+                    # 将多智能体动作编码为单个动作用于存储
+                    combined_action = int(multi_actions[0]) if len(multi_actions) > 0 else 0
+                    self.replay_buffer.add(state, combined_action, reward, next_state, done)
 
                     episode_return += reward
                     self.total_steps += 1

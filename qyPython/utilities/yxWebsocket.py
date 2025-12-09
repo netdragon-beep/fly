@@ -6,6 +6,7 @@ import logging
 import uuid
 import queue
 import traceback
+import socket
 from collections import deque
 import websockets
 import asyncio
@@ -19,6 +20,97 @@ logger = logging.getLogger(__name__)
 
 def all_not_none(*args):
     return all(arg is not None for arg in args)
+
+
+def check_port_available(host: str, port: int) -> bool:
+    """
+    检测端口是否可用（未被占用）
+
+    Args:
+        host: 主机地址
+        port: 端口号
+
+    Returns:
+        True: 端口可用
+        False: 端口被占用
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(1)
+    try:
+        sock.bind((host if host != '0.0.0.0' else '127.0.0.1', port))
+        sock.close()
+        return True
+    except socket.error:
+        return False
+    finally:
+        sock.close()
+
+
+def find_available_port(host: str, start_port: int, max_attempts: int = 10) -> int:
+    """
+    从指定端口开始查找可用端口
+
+    Args:
+        host: 主机地址
+        start_port: 起始端口
+        max_attempts: 最大尝试次数
+
+    Returns:
+        可用端口号，如果没找到返回 -1
+    """
+    for i in range(max_attempts):
+        port = start_port + i
+        if check_port_available(host, port):
+            return port
+    return -1
+
+
+def kill_port_process(port: int) -> bool:
+    """
+    尝试终止占用指定端口的进程（仅限Windows）
+
+    Args:
+        port: 端口号
+
+    Returns:
+        True: 成功终止
+        False: 终止失败
+    """
+    import subprocess
+    import sys
+
+    if sys.platform != 'win32':
+        logger.warning("自动终止端口进程仅支持 Windows 系统")
+        return False
+
+    try:
+        # 查找占用端口的进程
+        result = subprocess.run(
+            f'netstat -ano | findstr :{port}',
+            shell=True, capture_output=True, text=True
+        )
+
+        if result.stdout:
+            lines = result.stdout.strip().split('\n')
+            pids = set()
+            for line in lines:
+                parts = line.split()
+                if len(parts) >= 5:
+                    pid = parts[-1]
+                    if pid.isdigit() and pid != '0':
+                        pids.add(pid)
+
+            for pid in pids:
+                logger.info(f"正在终止占用端口 {port} 的进程 PID: {pid}")
+                subprocess.run(f'taskkill /F /PID {pid}', shell=True, capture_output=True)
+
+            time.sleep(0.5)  # 等待进程终止
+            return check_port_available('127.0.0.1', port)
+
+        return True
+    except Exception as e:
+        logger.error(f"终止端口进程失败: {e}")
+        return False
 
 #websocket服务器
 class YXWebSocketServer:
@@ -82,11 +174,46 @@ class YXWebSocketServer:
         self.running = True
         asyncio.run(server_main())
 
-    def start(self):
-        """在新线程中启动服务器"""
+    def start(self, auto_kill: bool = False, auto_find_port: bool = False):
+        """
+        在新线程中启动服务器
+
+        Args:
+            auto_kill: 如果端口被占用，自动终止占用进程
+            auto_find_port: 如果端口被占用，自动查找可用端口
+        """
+        # 检测端口是否可用
+        if not check_port_available(self.host, self.port):
+            logger.warning(f"端口 {self.port} 已被占用!")
+
+            if auto_kill:
+                logger.info(f"尝试终止占用端口 {self.port} 的进程...")
+                if kill_port_process(self.port):
+                    logger.info(f"成功释放端口 {self.port}")
+                else:
+                    logger.error(f"无法释放端口 {self.port}")
+                    if auto_find_port:
+                        new_port = find_available_port(self.host, self.port + 1)
+                        if new_port > 0:
+                            logger.info(f"使用替代端口: {new_port}")
+                            self.port = new_port
+                        else:
+                            raise RuntimeError(f"无法找到可用端口")
+                    else:
+                        raise RuntimeError(f"端口 {self.port} 被占用，无法启动服务器")
+            elif auto_find_port:
+                new_port = find_available_port(self.host, self.port + 1)
+                if new_port > 0:
+                    logger.info(f"端口 {self.port} 被占用，使用替代端口: {new_port}")
+                    self.port = new_port
+                else:
+                    raise RuntimeError(f"无法找到可用端口 (从 {self.port} 开始)")
+            else:
+                raise RuntimeError(f"端口 {self.port} 已被占用! 请先关闭占用该端口的程序，或设置 auto_kill=True 自动终止")
+
         self.thread = threading.Thread(target=self.start_server, daemon=True)
         self.thread.start()
-        logger.info("WebSocket 服务器线程已启动")
+        logger.info(f"WebSocket 服务器线程已启动 (端口: {self.port})")
 
     def stop(self):
         """停止服务器"""

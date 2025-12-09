@@ -125,23 +125,31 @@ def main():
         opponent_agent=opponent,
     )
 
-    for idx in range(1, args.episodes + 1):
-        print(f"\n===== 开始评估 Episode {idx} =====")
-        result = run_episode(env, q_net, device, args.max_episode_steps)
-        info = result["info"]
-        print(f"Episode {idx} 结束: steps={result['steps']} total_reward={result['total_reward']:.2f}")
-        if info.get("victory") is not None:
-            outcome = "胜利" if info["victory"] else "失败"
-            print(f"结果: {outcome}")
-        if "summary" in info:
-            summary = info["summary"]
-            stats = summary.get("stats", {})
-            print(f"统计: 击毁敌机(有人/无人) {stats.get('enemy_manned_killed', 0)}/{stats.get('enemy_uav_killed', 0)} | "
-                  f"己方损失 {stats.get('own_manned_lost', 0)}/{stats.get('own_uav_lost', 0)}")
-            print(f"中心占领比例: {stats.get('center_control_ratio', 0.0):.2%}")
-
-    if hasattr(env, "close"):
-        env.close()
+    try:
+        for idx in range(1, args.episodes + 1):
+            print(f"\n===== 开始评估 Episode {idx} =====")
+            result = run_episode(env, q_net, device, args.max_episode_steps)
+            info = result["info"]
+            print(f"Episode {idx} 结束: steps={result['steps']} total_reward={result['total_reward']:.2f}")
+            if info.get("victory") is not None:
+                outcome = "胜利" if info["victory"] else "失败"
+                print(f"结果: {outcome}")
+            if "summary" in info:
+                summary = info["summary"]
+                stats = summary.get("stats", {})
+                print(f"统计: 击毁敌机(有人/无人) {stats.get('enemy_manned_killed', 0)}/{stats.get('enemy_uav_killed', 0)} | "
+                      f"己方损失 {stats.get('own_manned_lost', 0)}/{stats.get('own_uav_lost', 0)}")
+                print(f"中心占领比例: {stats.get('center_control_ratio', 0.0):.2%}")
+    except KeyboardInterrupt:
+        print("\n[Evaluate] 评估被用户中断")
+    except Exception as e:
+        print(f"\n[Evaluate] 评估过程中发生错误: {e}")
+        raise
+    finally:
+        # 确保任何情况下都关闭环境，释放资源
+        if hasattr(env, "close"):
+            print("[Evaluate] 正在关闭环境...")
+            env.close()
 
 
 if __name__ == "__main__":

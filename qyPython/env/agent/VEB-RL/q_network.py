@@ -109,6 +109,52 @@ class QNetwork(nn.Module):
             return q_values.max(dim=-1)[0]
 
 
+    def get_multi_agent_actions(
+        self,
+        state: torch.Tensor,
+        num_agents: int = 5,
+        actions_per_agent: int = 12,
+        epsilon: float = 0.0
+    ) -> torch.Tensor:
+        """
+        多智能体动作选择 - 每个智能体独立选择最优动作
+
+        将 Q 值输出 (batch, num_agents * actions_per_agent) 重塑为
+        (batch, num_agents, actions_per_agent)，每个智能体选择自己的最优动作
+
+        Args:
+            state: 状态 shape=(batch, state_dim) 或 (state_dim,)
+            num_agents: 智能体数量（平台数）
+            actions_per_agent: 每个智能体的动作数
+            epsilon: 探索率
+
+        Returns:
+            actions: 每个智能体的动作 shape=(batch, num_agents) 或 (num_agents,)
+        """
+        single_input = state.dim() == 1
+        if single_input:
+            state = state.unsqueeze(0)
+
+        batch_size = state.shape[0]
+
+        with torch.no_grad():
+            q_values = self.forward(state)  # (batch, 60)
+
+            # 重塑为 (batch, num_agents, actions_per_agent)
+            q_values = q_values.view(batch_size, num_agents, actions_per_agent)
+
+            if np.random.random() < epsilon:
+                # 探索：每个智能体随机选择动作
+                actions = torch.randint(0, actions_per_agent, (batch_size, num_agents))
+            else:
+                # 利用：每个智能体选择自己Q值最大的动作
+                actions = q_values.argmax(dim=-1)  # (batch, num_agents)
+
+        if single_input:
+            return actions.squeeze(0)  # (num_agents,)
+        return actions
+
+
 class DuelingQNetwork(nn.Module):
     """
     Dueling Q Q
@@ -188,6 +234,36 @@ class DuelingQNetwork(nn.Module):
             q_values = self.forward(state)
             return q_values.max(dim=-1)[0]
 
+
+
+    def get_multi_agent_actions(
+        self,
+        state: torch.Tensor,
+        num_agents: int = 5,
+        actions_per_agent: int = 12,
+        epsilon: float = 0.0
+    ) -> torch.Tensor:
+        """
+        多智能体动作选择 - 每个智能体独立选择最优动作
+        """
+        single_input = state.dim() == 1
+        if single_input:
+            state = state.unsqueeze(0)
+
+        batch_size = state.shape[0]
+
+        with torch.no_grad():
+            q_values = self.forward(state)
+            q_values = q_values.view(batch_size, num_agents, actions_per_agent)
+
+            if np.random.random() < epsilon:
+                actions = torch.randint(0, actions_per_agent, (batch_size, num_agents))
+            else:
+                actions = q_values.argmax(dim=-1)
+
+        if single_input:
+            return actions.squeeze(0)
+        return actions
 
 def encode_q_weights(network: nn.Module) -> np.ndarray:
     """

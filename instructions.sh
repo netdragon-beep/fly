@@ -15,3 +15,5 @@ conda activate fly
     --epsilon-decay 0.99 \
     --save-best-interval 10 \
     --load-pop ../checkpoints/veb/final.npz
+
+  $env:NO_PROXY = "127.0.0.1,localhost"  

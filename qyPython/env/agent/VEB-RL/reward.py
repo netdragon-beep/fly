@@ -83,9 +83,12 @@ class RewardConfig:
 
     # === 边界区域配置（200km×200km）===
     # 边界中心坐标（需根据实际地图调整）
+    # 注意：这些是默认值，实际使用时应根据战场数据调整
     boundary_center_longitude: float = 146.1   # 边界中心经度
     boundary_center_latitude: float = 33.3     # 边界中心纬度
-    boundary_half_size: float = 100000.0       # 边界半边长（米），200km/2=100km
+    boundary_half_size: float = 200000.0       # 边界半边长（米），增大到200km避免误判
+    # 设置为True则禁用边界检测（调试用）
+    disable_boundary_check: bool = True        # 暂时禁用边界检测
 
     # === 边界违规惩罚 ===
     boundary_warning_distance: float = 10000.0 # 接近边界警告距离（10km）
@@ -676,6 +679,10 @@ class RewardCalculator:
         Returns:
             边界违规惩罚
         """
+        # 如果禁用边界检测，直接返回0
+        if self.config.disable_boundary_check:
+            return 0.0
+
         reward = 0.0
 
         # 使用仿真时间或步数估算时间（假设每步0.1秒）
