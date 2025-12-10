@@ -2,12 +2,87 @@
 攻击逻辑动作节点
 
 包含智能火控和Shoot-Look-Shoot策略
+支持规则(v1)和强化学习(SAC)两种火控模式
 """
 
 from ..bt_framework import Action, NodeStatus
 from ..fire_control import SmartFireControl
 from utilities.yxScriptTreeFunc import YxScriptTreeFunc as decCmd
 from utilities.yxGeoUtils import YxGeoUtils
+
+# ==================== 火控模式配置 ====================
+# 可选: 'rule' (v1规则), 'rl' (SAC强化学习), 'hybrid' (混合)
+FIRE_CONTROL_MODE = 'rl'  # 切换到RL模式测试
+
+# RL模型路径 (当使用rl或hybrid模式时需要)
+import os
+_current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RL_MODEL_PATH = os.path.join(_current_dir, 'checkpoints', 'sac_fire_control', 'sac_fire_control_pretrained.pt')
+
+# 全局火控系统实例 (延迟初始化)
+_hybrid_fire_control = None
+_rl_import_failed = False  # 标记是否已经尝试导入失败
+
+def get_fire_control():
+    """获取火控系统实例"""
+    global _hybrid_fire_control, _rl_import_failed
+
+    # 如果已经导入失败过，不再重复尝试
+    if _rl_import_failed:
+        return None
+
+    if _hybrid_fire_control is None:
+        try:
+            # 添加父目录到路径
+            import sys
+            parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+
+            # 直接导入
+            from QC1.fly.qyPython.env.agent.策略树.fire_control_rl暂时不打算使用 import HybridFireControl
+            _hybrid_fire_control = HybridFireControl(RL_MODEL_PATH)
+            _hybrid_fire_control.set_mode(FIRE_CONTROL_MODE)
+            print(f"[火控] RL模块加载成功，模式: {FIRE_CONTROL_MODE}")
+        except Exception as e:
+            print(f"[火控] RL模块导入失败: {e}, 使用规则模式")
+            _rl_import_failed = True
+            _hybrid_fire_control = None
+    return _hybrid_fire_control
+
+
+def set_fire_control_mode(mode: str, model_path: str = None):
+    """
+    设置火控模式
+
+    Args:
+        mode: 'rule' (v1规则), 'rl' (SAC强化学习), 'hybrid' (混合)
+        model_path: RL模型路径 (当mode='rl'或'hybrid'时需要)
+
+    使用示例:
+        from env.agent.策略树.actions.attack import set_fire_control_mode
+
+        # 使用规则模式 (默认)
+        set_fire_control_mode('rule')
+
+        # 使用RL模式
+        set_fire_control_mode('rl', 'checkpoints/sac_fire_control/model.pt')
+
+        # 使用混合模式 (规则+RL都同意才开火)
+        set_fire_control_mode('hybrid', 'checkpoints/sac_fire_control/model.pt')
+    """
+    global FIRE_CONTROL_MODE, RL_MODEL_PATH, _hybrid_fire_control
+
+    FIRE_CONTROL_MODE = mode
+    if model_path:
+        RL_MODEL_PATH = model_path
+
+    # 重置火控实例，下次调用时重新初始化
+    _hybrid_fire_control = None
+
+    print(f"[火控] 模式切换为: {mode}")
+    if model_path:
+        print(f"[火控] RL模型: {model_path}")
 
 
 class ActionAttackLogic(Action):
@@ -121,6 +196,11 @@ class ActionAttackLogic(Action):
         # Sub-step 1: 智能火控 (Smart Fire Control)
         # 收集所有可能的射击方案，使用SmartFireControl评估
         fire_candidates = []
+
+        # 先收集所有有效的 (unit, enemy) 对
+        valid_pairs = []
+        pair_metadata = []  # 存储额外信息
+
         for unit in agent.own_units:
             # 检查是否有弹药
             has_ammo = False
@@ -141,21 +221,39 @@ class ActionAttackLogic(Action):
                 if u_lon is None or u_lat is None or e_lon is None or e_lat is None:
                     continue
 
-                # 使用智能火控系统评估
-                should_fire, pk, reason = SmartFireControl.should_fire(unit, enemy, agent)
-
+                valid_pairs.append((unit, enemy))
                 # 计算距离用于排序
                 d = YxGeoUtils.haversine_distance(u_lon, u_lat, e_lon, e_lat)
-
                 # 判断敌机类型：有人机优先级更高
                 enemy_type = enemy.get('platform_entity_type', '无人机')
-                priority = 0 if enemy_type == '有人机' else 1  # 0=高优先级
+                priority = 0 if enemy_type == '有人机' else 1
+                pair_metadata.append({'dist': d, 'priority': priority})
 
+        # 批量评估火控决策
+        hybrid_fc = get_fire_control()
+        if hybrid_fc and FIRE_CONTROL_MODE != 'rule' and valid_pairs:
+            # 使用批量推理 (高效)
+            results = hybrid_fc.batch_should_fire(valid_pairs, agent)
+            for i, (unit, enemy) in enumerate(valid_pairs):
+                should_fire, pk, reason = results[i]
                 fire_candidates.append({
                     'unit': unit,
                     'enemy': enemy,
-                    'dist': d,
-                    'priority': priority,
+                    'dist': pair_metadata[i]['dist'],
+                    'priority': pair_metadata[i]['priority'],
+                    'should_fire': should_fire,
+                    'pk': pk,
+                    'reason': reason
+                })
+        else:
+            # 规则模式，逐个评估
+            for i, (unit, enemy) in enumerate(valid_pairs):
+                should_fire, pk, reason = SmartFireControl.should_fire(unit, enemy, agent)
+                fire_candidates.append({
+                    'unit': unit,
+                    'enemy': enemy,
+                    'dist': pair_metadata[i]['dist'],
+                    'priority': pair_metadata[i]['priority'],
                     'should_fire': should_fire,
                     'pk': pk,
                     'reason': reason

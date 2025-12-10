@@ -3,7 +3,8 @@ from env.env import auto_engage_main, teaming_engage_main
 from env.multi_env import auto_engage_main_multi
 from env.agent.demo.demo_auto_agent import DemoAutoAgent
 from env.agent.demo.demo_teaming_agent import DemoTeamingAgent
-from env.agent.策略树.Behavior_Tree_auto import BTDemoAgent  # 行为树智能体
+from env.agent.策略树.Behavior_Tree_auto import BTDemoAgent  # 我们的行为树智能体
+from env.agent.学长的算法.学长算法 import BTDemoAgent_v1  # 学长的算法
 # from env.agent.test1.test1_auto_agent import FlyTeamAutoAgent
 # from env.agent.test1.test1_teaming_agent import FlyTeamTeamingAgent
 from utilities.yxHttp import YxHttpRequest as yxHttp
@@ -13,9 +14,14 @@ if __name__ == '__main__':
     yxHttp.clear_room()
     if config.current_config.battle_mode == config.ENGAGE_MODE_AUTO:
         # 机器竞技模式
-        # 红方使用行为树智能体，蓝方使用官方demo
+        # ========== 对战配置 ==========
+        # 红方：我们的策略树算法 (SmartFireControl v1)
+        # 蓝方：学长的算法 (BTDemoAgent_v1)
         red_agent = BTDemoAgent('red', "red_bt")
-        blue_agent = DemoAutoAgent('blue', "blue_demo")
+        blue_agent = BTDemoAgent('blue', "blue_bt")
+        # blue_agent = BTDemoAgent_v1('blue', "blue_senior")  # 改用学长算法
+        # blue_agent = DemoAutoAgent('blue', "blue_demo")  # 官方demo (备用)
+        # ==============================
         # # 新智能体
         if config.is_single_instance:
             auto_engage_main(red_agent, blue_agent)
