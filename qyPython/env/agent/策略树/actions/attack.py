@@ -14,20 +14,26 @@ class ActionAttackLogic(Action):
     """
     攻击逻辑：包含智能火控和机动
 
-    采用 Shoot-Look-Shoot (发射-观察-再发射) 策略：
-    - 对同一目标发射导弹后，等待导弹到达（命中或脱靶）
-    - 只有确认结果后才考虑发射第二颗导弹
-    - 避免浪费弹药的齐射行为
+    采用 双机协同开火 (Coordinated Fire) 策略：
+    - 必须两架飞机同时对同一目标各发射一发导弹
+    - 不允许单机独立开火（避免浪费弹药）
+    - 双机从不同方向攻击，目标难以同时规避
+    - 每次协同攻击消耗2发导弹，但命中率大幅提升
     """
 
     # 调试开关
-    DEBUG_ENABLED = False
-    DEBUG_INTERVAL = 10  # 每N帧输出一次火控信息（更频繁）
+    DEBUG_ENABLED = True  # 开启调试便于观察协同开火
+    DEBUG_INTERVAL = 10  # 每N帧输出一次火控信息
 
-    # Shoot-Look-Shoot 参数
+    # 协同开火参数
     MISSILE_FLIGHT_TIME_ESTIMATE = 80  # 估计导弹飞行时间（帧），约8秒@10fps
-    MIN_REFIRE_INTERVAL = 40           # 最小再次发射间隔（帧），约4秒
-    MAX_PENDING_MISSILES_PER_TARGET = 1  # 每个目标最多同时有N枚待定导弹（防止多射手浪费）
+    MIN_REFIRE_INTERVAL = 50           # 最小再次发射间隔（帧），约5秒
+    MAX_PENDING_MISSILES_PER_TARGET = 2  # 每个目标最多同时有2枚导弹（双机各1发）
+
+    # 双机协同开火配置
+    REQUIRE_COORDINATED_FIRE = True    # 是否强制要求双机协同（True=必须双机同时开火）
+    COORDINATED_FIRE_WINDOW = 3        # 协同开火时间窗口（帧），两机必须在此窗口内都能开火
+    MIN_ANGLE_DIFFERENCE = 30          # 最小攻击角度差（度），确保从不同方向攻击
 
     # 数据收集开关（用于拟合致死区间模型）
     COLLECT_KILL_DATA = True
@@ -170,7 +176,7 @@ class ActionAttackLogic(Action):
         # 调试输出 - 详细火控信息
         if self.DEBUG_ENABLED and should_debug:
             print(f"\n{'='*60}")
-            print(f"[火控系统] Frame {agent.frame_count}")
+            print(f"[火控系统-双机协同] Frame {agent.frame_count}")
             print(f"{'='*60}")
 
             # 己方单位弹药状态
@@ -204,126 +210,199 @@ class ActionAttackLogic(Action):
                     elapsed = agent.frame_count - frame
                     print(f"    - {shooter_name}: 已飞行{elapsed}帧")
 
-            # 射击方案评估
-            if fire_candidates:
-                print(f"[射击方案评估] 共 {len(fire_candidates)} 个")
-                for i, cand in enumerate(fire_candidates[:8]):
-                    unit_name = cand['unit']['name']
-                    enemy_name = cand['enemy'].get('target_name', cand['enemy'].get('name', '?'))
-                    status = "✓开火" if cand['should_fire'] else "✗等待"
-                    print(f"  {i+1}. {unit_name} -> {enemy_name}: "
-                          f"Pk={cand['pk']:.2f}, 距离={cand['dist']/1000:.1f}km, "
-                          f"{status}, {cand['reason']}")
+        # === 双机协同开火逻辑 ===
+        if self.REQUIRE_COORDINATED_FIRE:
+            # 按目标分组候选射击方案
+            candidates_by_target = {}
+            for cand in fire_candidates:
+                if not cand['should_fire']:
+                    continue
+                target_id = cand['enemy'].get('target_id', cand['enemy'].get('id', id(cand['enemy'])))
+                if target_id not in candidates_by_target:
+                    candidates_by_target[target_id] = []
+                candidates_by_target[target_id].append(cand)
 
-        for cand in fire_candidates:
-            u, e = cand['unit'], cand['enemy']
+            if self.DEBUG_ENABLED and should_debug:
+                print(f"\n[协同开火分析]")
+                for target_id, cands in candidates_by_target.items():
+                    target_name = cands[0]['enemy'].get('target_name', '?')
+                    shooters = [c['unit']['name'] for c in cands]
+                    print(f"  目标 {target_name}: 可用射手 {shooters}")
 
-            # 每个单位每帧只开火一次
-            if u['name'] in fired_units:
-                continue
-
-            # 智能火控判断不应该开火
-            if not cand['should_fire']:
-                continue
-
-            # 安全获取 target_id
-            target_id = e.get('target_id', e.get('id', id(e)))
-
-            # === Shoot-Look-Shoot 检查 ===
-
-            # 检查1: 该目标已有多少枚待定导弹（来自所有射手）
-            missiles_to_target = sum(1 for key in agent.pending_missiles if key[1] == target_id)
-            if missiles_to_target >= self.MAX_PENDING_MISSILES_PER_TARGET:
-                if self.DEBUG_ENABLED and should_debug:
-                    shooters = [key[0] for key in agent.pending_missiles if key[1] == target_id]
-                    print(f"  [全局限制] 目标{target_id}已有{missiles_to_target}枚导弹在途 "
-                          f"(射手: {', '.join(shooters)}), {u['name']}跳过")
-                continue
-
-            # 检查2: 该射手是否已有导弹正在飞向该目标
-            pending_key = (u['name'], target_id)
-            if pending_key in agent.pending_missiles:
-                launch_frame = agent.pending_missiles[pending_key]
-                frames_elapsed = agent.frame_count - launch_frame
-                # 如果还没到最小再发射间隔，跳过
-                if frames_elapsed < self.MIN_REFIRE_INTERVAL:
+            # 寻找可以协同开火的目标
+            for target_id, cands in candidates_by_target.items():
+                # 需要至少2架飞机可以对同一目标开火
+                if len(cands) < 2:
                     if self.DEBUG_ENABLED and should_debug:
-                        print(f"  [Shoot-Look-Shoot] {u['name']} 等待上一枚导弹结果 "
-                              f"(已过{frames_elapsed}帧/{self.MISSILE_FLIGHT_TIME_ESTIMATE}帧)")
+                        target_name = cands[0]['enemy'].get('target_name', '?')
+                        print(f"  [跳过] 目标 {target_name}: 只有1架飞机可开火，需要双机协同")
                     continue
 
-            # 敌机未被过度攻击 (最多4发导弹)
-            already_fired = e.get('is_fired_num', 0) + cur_round_shots.get(target_id, 0)
-            if already_fired >= 4:
-                continue
+                # 检查该目标是否已有导弹在途
+                missiles_to_target = sum(1 for key in agent.pending_missiles if key[1] == target_id)
+                if missiles_to_target >= self.MAX_PENDING_MISSILES_PER_TARGET:
+                    if self.DEBUG_ENABLED and should_debug:
+                        target_name = cands[0]['enemy'].get('target_name', '?')
+                        print(f"  [跳过] 目标 {target_name}: 已有{missiles_to_target}枚导弹在途")
+                    continue
 
-            # 安全获取 target_name
-            target_name = e.get('target_name', e.get('name', ''))
-            if not target_name:
-                continue
+                # 选择最佳的两架飞机进行协同攻击
+                # 使用V2物理NEZ模型评估最佳配对
+                best_pair = None
+                best_combined_pk = 0
+                best_nez_info = None
+                best_fire_reason = ""
 
-            # 发射！
-            if agent.try_fire_weapon(u):
-                agent.add_action(decCmd.fire_track(u['name'], target_name), None)
-                cur_round_shots[target_id] = cur_round_shots.get(target_id, 0) + 1
-                fired_units.add(u['name'])
+                for i in range(len(cands)):
+                    for j in range(i + 1, len(cands)):
+                        unit1 = cands[i]['unit']
+                        unit2 = cands[j]['unit']
+                        enemy = cands[i]['enemy']
 
-                # === 记录 Shoot-Look-Shoot 追踪 ===
-                agent.pending_missiles[pending_key] = agent.frame_count
+                        # 检查两架飞机是否都还没开火
+                        if unit1['name'] in fired_units or unit2['name'] in fired_units:
+                            continue
 
-                # === 收集发射时的详细参数 ===
-                u_lon = u.get('longitude', 0)
-                u_lat = u.get('latitude', 0)
-                e_lon = e.get('longitude', 0)
-                e_lat = e.get('latitude', 0)
+                        # 检查两架飞机是否都有弹药
+                        if not self._has_ammo(unit1) or not self._has_ammo(unit2):
+                            continue
 
-                aspect = SmartFireControl.calculate_aspect_angle(
-                    u_lon, u_lat, u.get('heading', 0),
-                    e_lon, e_lat, e.get('heading', 0)
-                )
-                closure = SmartFireControl.calculate_closure_rate(
-                    u_lon, u_lat, u.get('speed', 300), u.get('heading', 0),
-                    e_lon, e_lat, e.get('speed', 300), e.get('heading', 0)
-                )
-                is_manned = u.get('type') == '有人机'
-                target_is_manned = e.get('platform_entity_type') == '有人机'
-                nez = SmartFireControl.calculate_nez(is_manned, aspect)
+                        # 检查两架飞机是否都没有对该目标的待定导弹
+                        key1 = (unit1['name'], target_id)
+                        key2 = (unit2['name'], target_id)
+                        if key1 in agent.pending_missiles or key2 in agent.pending_missiles:
+                            continue
 
-                # === 数据收集：记录发射参数 ===
-                if self.COLLECT_KILL_DATA:
-                    # 估算导弹飞行距离（用于分析伤害衰减）
-                    # 无人机导弹速度约800m/s，有人机约900m/s
-                    missile_speed = 900 if is_manned else 800
+                        # 使用V2物理NEZ模型评估协同开火
+                        should_fire, combined_pk, nez_info, reason = SmartFireControl.should_coordinated_fire(
+                            unit1, unit2, enemy, agent
+                        )
 
-                    agent.missile_launch_data[pending_key] = {
-                        'launch_frame': agent.frame_count,
-                        'shooter_name': u['name'],
-                        'shooter_type': u.get('type', '无人机'),
-                        'target_id': target_id,
-                        'target_name': target_name,
-                        'target_type': e.get('platform_entity_type', '无人机'),
-                        'distance': cand['dist'],
-                        'aspect_angle': aspect,
-                        'closure_rate': closure,
-                        'pk': cand['pk'],
-                        'nez': nez,
-                        'in_nez': cand['dist'] <= nez,
-                        'shooter_speed': u.get('speed', 300),
-                        'target_speed': e.get('speed', 300),
-                        'shooter_alt': u.get('altitude', 3000),
-                        'target_alt': e.get('altitude', 3000),
-                        # 新增：用于分析伤害衰减
-                        'missile_speed': missile_speed,
-                        'altitude_diff': abs(u.get('altitude', 3000) - e.get('altitude', 3000)),
-                        'combined_speed': closure + missile_speed,  # 导弹相对目标的逼近速度
-                    }
+                        # 选择综合Pk最高的配对
+                        if should_fire and combined_pk > best_combined_pk:
+                            best_combined_pk = combined_pk
+                            best_pair = (cands[i], cands[j])
+                            best_nez_info = nez_info
+                            best_fire_reason = reason
 
-                if self.DEBUG_ENABLED:
-                    print(f"\n[开火!!!] {u['name']} -> {target_name}")
-                    print(f"  距离: {cand['dist']/1000:.2f}km, NEZ: {nez/1000:.2f}km")
-                    print(f"  姿态角: {aspect:.1f}° (0=迎头, 180=尾追)")
-                    print(f"  接近率: {closure:.1f}m/s (正=接近, 负=远离)")
-                    print(f"  Pk: {cand['pk']:.2f}, 原因: {cand['reason']}")
+                # 如果找到合适的配对，执行协同开火
+                if best_pair and best_combined_pk >= SmartFireControl.PK_THRESHOLD_COORDINATED:
+                    cand1, cand2 = best_pair
+                    unit1, unit2 = cand1['unit'], cand2['unit']
+                    enemy = cand1['enemy']
+                    target_name = enemy.get('target_name', enemy.get('name', ''))
+
+                    if not target_name:
+                        continue
+
+                    # 检查敌机未被过度攻击
+                    already_fired = enemy.get('is_fired_num', 0) + cur_round_shots.get(target_id, 0)
+                    if already_fired >= 4:
+                        continue
+
+                    # 双机同时发射！
+                    fire_success_1 = agent.try_fire_weapon(unit1)
+                    fire_success_2 = agent.try_fire_weapon(unit2)
+
+                    if fire_success_1 and fire_success_2:
+                        # 两架都成功发射
+                        agent.add_action(decCmd.fire_track(unit1['name'], target_name), None)
+                        agent.add_action(decCmd.fire_track(unit2['name'], target_name), None)
+
+                        cur_round_shots[target_id] = cur_round_shots.get(target_id, 0) + 2
+                        fired_units.add(unit1['name'])
+                        fired_units.add(unit2['name'])
+
+                        # 记录待定导弹
+                        pending_key1 = (unit1['name'], target_id)
+                        pending_key2 = (unit2['name'], target_id)
+                        agent.pending_missiles[pending_key1] = agent.frame_count
+                        agent.pending_missiles[pending_key2] = agent.frame_count
+
+                        # 详细输出协同开火信息
+                        print(f"\n{'*'*60}")
+                        print(f"[双机协同开火!!! - V2物理NEZ]")
+                        print(f"  射手1: {unit1['name']}")
+                        print(f"    距离: {best_nez_info['dist1']/1000:.2f}km, NEZ: {best_nez_info['nez1']/1000:.2f}km")
+                        print(f"    Pk: {best_nez_info['pk1']:.2f}, 径向速度: {best_nez_info['v_radial_1']:.1f}m/s, 横向速度: {best_nez_info['v_lateral_1']:.1f}m/s")
+                        print(f"  射手2: {unit2['name']}")
+                        print(f"    距离: {best_nez_info['dist2']/1000:.2f}km, NEZ: {best_nez_info['nez2']/1000:.2f}km")
+                        print(f"    Pk: {best_nez_info['pk2']:.2f}, 径向速度: {best_nez_info['v_radial_2']:.1f}m/s, 横向速度: {best_nez_info['v_lateral_2']:.1f}m/s")
+                        print(f"  目标: {target_name}")
+                        print(f"  综合Pk: {best_combined_pk:.2f}")
+                        print(f"  逃逸难度: {best_nez_info['escape_difficulty']:.2f}")
+                        print(f"  协同NEZ: {best_nez_info['combined_nez']/1000:.2f}km")
+                        print(f"  开火原因: {best_fire_reason}")
+                        print(f"{'*'*60}")
+
+                        # 收集发射数据（为两架飞机分别记录）
+                        self._record_launch_data(agent, unit1, enemy, cand1, pending_key1)
+                        self._record_launch_data(agent, unit2, enemy, cand2, pending_key2)
+
+                    elif fire_success_1 or fire_success_2:
+                        # 只有一架成功发射 - 这不应该发生，但如果发生了要处理
+                        if fire_success_1:
+                            agent.add_action(decCmd.fire_track(unit1['name'], target_name), None)
+                            fired_units.add(unit1['name'])
+                            pending_key1 = (unit1['name'], target_id)
+                            agent.pending_missiles[pending_key1] = agent.frame_count
+                            print(f"[警告] 协同开火失败，只有 {unit1['name']} 成功发射")
+                        if fire_success_2:
+                            agent.add_action(decCmd.fire_track(unit2['name'], target_name), None)
+                            fired_units.add(unit2['name'])
+                            pending_key2 = (unit2['name'], target_id)
+                            agent.pending_missiles[pending_key2] = agent.frame_count
+                            print(f"[警告] 协同开火失败，只有 {unit2['name']} 成功发射")
+
+                elif best_pair:
+                    if self.DEBUG_ENABLED and should_debug:
+                        target_name = cands[0]['enemy'].get('target_name', '?')
+                        print(f"  [跳过] 目标 {target_name}: 综合Pk {best_combined_pk:.2f} < {SmartFireControl.PK_THRESHOLD_COORDINATED}")
+        else:
+            # 原始单机开火逻辑（作为备用）
+            for cand in fire_candidates:
+                u, e = cand['unit'], cand['enemy']
+
+                if u['name'] in fired_units:
+                    continue
+
+                if not cand['should_fire']:
+                    continue
+
+                target_id = e.get('target_id', e.get('id', id(e)))
+
+                missiles_to_target = sum(1 for key in agent.pending_missiles if key[1] == target_id)
+                if missiles_to_target >= self.MAX_PENDING_MISSILES_PER_TARGET:
+                    continue
+
+                pending_key = (u['name'], target_id)
+                if pending_key in agent.pending_missiles:
+                    launch_frame = agent.pending_missiles[pending_key]
+                    frames_elapsed = agent.frame_count - launch_frame
+                    if frames_elapsed < self.MIN_REFIRE_INTERVAL:
+                        continue
+
+                already_fired = e.get('is_fired_num', 0) + cur_round_shots.get(target_id, 0)
+                if already_fired >= 4:
+                    continue
+
+                target_name = e.get('target_name', e.get('name', ''))
+                if not target_name:
+                    continue
+
+                if agent.try_fire_weapon(u):
+                    agent.add_action(decCmd.fire_track(u['name'], target_name), None)
+                    cur_round_shots[target_id] = cur_round_shots.get(target_id, 0) + 1
+                    fired_units.add(u['name'])
+
+                    # === 记录 Shoot-Look-Shoot 追踪 ===
+                    agent.pending_missiles[pending_key] = agent.frame_count
+
+                    # 收集发射数据
+                    self._record_launch_data(agent, u, e, cand, pending_key)
+
+                    if self.DEBUG_ENABLED:
+                        print(f"\n[单机开火] {u['name']} -> {target_name}")
 
         # Sub-step 2: Maneuver to Attack (仅对未被占用的单位有效)
         for unit in agent.own_units:
@@ -467,3 +546,88 @@ class ActionAttackLogic(Action):
             print(f"  在NEZ内: {in_nez_misses}/{len(misses)} ({100*in_nez_misses/len(misses):.1f}%)")
 
         print(f"{'='*60}\n")
+
+    def _has_ammo(self, unit) -> bool:
+        """检查单位是否有弹药"""
+        for weapon in unit.get('weapons', []):
+            if weapon.get('quantity', 0) > 0:
+                return True
+        return False
+
+    def _calculate_attack_angle_difference(self, unit1, unit2, enemy) -> float:
+        """
+        计算两架飞机相对目标的攻击角度差
+
+        返回两架飞机从目标视角看的方位角差异（0-180度）
+        角度差越大，目标越难同时规避两个方向的攻击
+        """
+        import math
+
+        # 获取坐标
+        u1_lon = unit1.get('longitude', unit1.get('X', 0))
+        u1_lat = unit1.get('latitude', unit1.get('Y', 0))
+        u2_lon = unit2.get('longitude', unit2.get('X', 0))
+        u2_lat = unit2.get('latitude', unit2.get('Y', 0))
+        e_lon = enemy.get('longitude', enemy.get('X', 0))
+        e_lat = enemy.get('latitude', enemy.get('Y', 0))
+
+        # 计算从目标到两架飞机的方位角
+        angle1 = math.atan2(u1_lon - e_lon, u1_lat - e_lat) * 180 / math.pi
+        angle2 = math.atan2(u2_lon - e_lon, u2_lat - e_lat) * 180 / math.pi
+
+        # 计算角度差（0-180度）
+        diff = abs(angle1 - angle2)
+        if diff > 180:
+            diff = 360 - diff
+
+        return diff
+
+    def _record_launch_data(self, agent, unit, enemy, cand, pending_key):
+        """记录导弹发射数据用于分析"""
+        if not self.COLLECT_KILL_DATA:
+            return
+
+        u_lon = unit.get('longitude', 0)
+        u_lat = unit.get('latitude', 0)
+        e_lon = enemy.get('longitude', 0)
+        e_lat = enemy.get('latitude', 0)
+
+        target_id = enemy.get('target_id', enemy.get('id', id(enemy)))
+        target_name = enemy.get('target_name', enemy.get('name', ''))
+
+        aspect = SmartFireControl.calculate_aspect_angle(
+            u_lon, u_lat, unit.get('heading', 0),
+            e_lon, e_lat, enemy.get('heading', 0)
+        )
+        closure = SmartFireControl.calculate_closure_rate(
+            u_lon, u_lat, unit.get('speed', 300), unit.get('heading', 0),
+            e_lon, e_lat, enemy.get('speed', 300), enemy.get('heading', 0)
+        )
+        is_manned = unit.get('type') == '有人机'
+        nez = SmartFireControl.calculate_nez(is_manned, aspect)
+
+        # 估算导弹飞行距离
+        missile_speed = 900 if is_manned else 800
+
+        agent.missile_launch_data[pending_key] = {
+            'launch_frame': agent.frame_count,
+            'shooter_name': unit['name'],
+            'shooter_type': unit.get('type', '无人机'),
+            'target_id': target_id,
+            'target_name': target_name,
+            'target_type': enemy.get('platform_entity_type', '无人机'),
+            'distance': cand['dist'],
+            'aspect_angle': aspect,
+            'closure_rate': closure,
+            'pk': cand['pk'],
+            'nez': nez,
+            'in_nez': cand['dist'] <= nez,
+            'shooter_speed': unit.get('speed', 300),
+            'target_speed': enemy.get('speed', 300),
+            'shooter_alt': unit.get('altitude', 3000),
+            'target_alt': enemy.get('altitude', 3000),
+            'missile_speed': missile_speed,
+            'altitude_diff': abs(unit.get('altitude', 3000) - enemy.get('altitude', 3000)),
+            'combined_speed': closure + missile_speed,
+            'coordinated_fire': self.REQUIRE_COORDINATED_FIRE,  # 标记是否为协同开火
+        }
