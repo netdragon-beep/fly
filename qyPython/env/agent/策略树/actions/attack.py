@@ -21,7 +21,7 @@ class ActionAttackLogic(Action):
     """
 
     # 调试开关
-    DEBUG_ENABLED = True
+    DEBUG_ENABLED = False
     DEBUG_INTERVAL = 10  # 每N帧输出一次火控信息（更频繁）
 
     # Shoot-Look-Shoot 参数

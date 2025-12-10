@@ -16,7 +16,7 @@ from .actions import (
     ActionResetFrame,
     ConditionCheckInitialDeployment,
     ActionExecuteDeployment,
-    ActionEvadeMissiles,
+    ActionEvadeMissilesAdvanced,
     ActionProtectMannedVision,
     ActionMannedRetreat,
     ActionAttackLogic,
@@ -81,7 +81,7 @@ class BTDemoAgent(AutoAgentBase):
             # 分支 2: 常规战斗循环 (Main Loop)
             Sequence([
                 ActionResetFrame(),          # 步骤1: 清理
-                ActionEvadeMissiles(),       # 步骤2: 导弹规避（最高优先级）
+                ActionEvadeMissilesAdvanced(),  # 步骤2: 导弹规避（高级版，有人机优先保护）
                 ActionProtectMannedVision(), # 步骤3: 无弹药无人机→保护有人机视野
                 ActionMannedRetreat(),       # 步骤4: 发现敌机→有人机后撤
                 ActionAttackLogic(),         # 步骤5: 开火逻辑

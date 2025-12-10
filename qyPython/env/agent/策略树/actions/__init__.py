@@ -10,7 +10,7 @@ from .basic_actions import (
     ActionExecuteDeployment
 )
 
-from .evasion import ActionEvadeMissiles
+from .evasion import ActionEvadeMissiles, ActionEvadeMissilesAdvanced
 
 from .attack import ActionAttackLogic
 
@@ -29,6 +29,7 @@ __all__ = [
     'ActionExecuteDeployment',
     # 规避
     'ActionEvadeMissiles',
+    'ActionEvadeMissilesAdvanced',
     # 攻击
     'ActionAttackLogic',
     # 阵型
