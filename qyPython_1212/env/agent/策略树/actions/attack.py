@@ -37,7 +37,7 @@ class ActionAttackLogic(Action):
     MIN_ANGLE_DIFFERENCE = 30          # 最小攻击角度差（度），确保从不同方向攻击
 
     # 数据收集开关（用于拟合致死区间模型）
-    COLLECT_KILL_DATA = False
+    COLLECT_KILL_DATA = True
 
     def tick(self, agent) -> str:
         if not agent.enemy_units:
@@ -70,9 +70,9 @@ class ActionAttackLogic(Action):
                 record['result'] = 'timeout'
                 record['flight_frames'] = agent.frame_count - record['launch_frame']
                 agent.kill_data_records.append(record)
-                # print(f"[数据收集] 脱靶: dist={record['distance']:.0f}m, "
-                #       f"aspect={record['aspect_angle']:.1f}°, "
-                #       f"closure={record['closure_rate']:.1f}m/s, Pk={record['pk']:.2f}")
+                print(f"[数据收集] 脱靶: dist={record['distance']:.0f}m, "
+                      f"aspect={record['aspect_angle']:.1f}°, "
+                      f"closure={record['closure_rate']:.1f}m/s, Pk={record['pk']:.2f}")
 
         # === 检查己方导弹状态（如果有的话）===
         # 通过检测目标是否还存在来判断导弹是否命中

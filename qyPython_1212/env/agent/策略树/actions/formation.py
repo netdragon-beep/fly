@@ -107,8 +107,8 @@ class ActionSearchFormation(Action):
     # 搜索阵型配置
     UAV_SPACING_KM = 18             # 无人机横向间距 km（覆盖雷达盲区）
     MANNED_BEHIND_KM = 15           # 有人机在无人机后方距离 km
-    ADVANCE_SPEED_UAV = 400         # 无人机推进速度 m/s（中速推进，留有机动余量）
-    ADVANCE_SPEED_MANNED = 320      # 有人机推进速度 m/s（略慢于无人机）
+    ADVANCE_SPEED_UAV = 300         # 无人机推进速度 m/s（中速推进，留有机动余量）
+    ADVANCE_SPEED_MANNED = 280      # 有人机推进速度 m/s（略慢于无人机）
 
     # 搜索终止条件：经过中心区域后继续搜索的距离
     PASS_CENTER_KM = 30             # 经过中心30km后停止搜索

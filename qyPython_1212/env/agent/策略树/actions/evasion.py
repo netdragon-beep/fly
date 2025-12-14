@@ -1,12 +1,16 @@
 """
-导弹规避动作节点
+导弹规避动作节点 - 垂直躲避策略
 
-基于官方赛题参数设计的规避策略：
+基于官方赛题参数设计的垂直规避策略：
 - 有人机：最大速度500m/s，高度范围2000-7000m
 - 无人机：最大速度360m/s，高度范围2000-7000m
 - 导弹：速度1200m/s，最大飞行时间60s，最大飞行距离72km
 
-规避策略采用Cranking机动 + 高度变化 + 速度调整
+垂直躲避策略特点：
+- 检测到导弹威胁时，主要通过快速改变高度来规避
+- 利用导弹在垂直方向追踪能力较弱的特点
+- 高度变化范围: 2000-7000m (5000m可用空间)
+- 配合水平方向小幅度机动
 """
 
 import math
@@ -17,7 +21,7 @@ from utilities.yxGeoUtils import YxGeoUtils
 
 class ActionEvadeMissiles(Action):
     """
-    多导弹协同规避 - 基于官方参数的Cranking机动策略
+    垂直躲避策略 - 主要通过高度变化规避导弹
 
     === 官方参数（来自初赛赛题任务想定设计.pdf）===
 
@@ -32,116 +36,60 @@ class ActionEvadeMissiles(Action):
     - 杀伤半径：10m
     - 导引头引爆距离：10m
 
-    战场参数：
-    - 任务区域：200km × 200km
-    - 雷达探测距离：有人机60km，无人机40km
-
-    规避策略原理：
-    1. 威胁评估：基于导弹最大飞行距离72km和飞行时间60s计算威胁区
-    2. Cranking机动：斜向后方飞行，迫使导弹持续转向消耗能量
-    3. 高度规避：利用飞机高度限制进行垂直机动
-    4. 速度优化：根据威胁等级调整到最大速度
-    5. 边界感知：确保规避方向不会飞出200km×200km战场
+    垂直躲避原理：
+    1. 导弹在垂直方向的追踪能力相对较弱
+    2. 快速改变高度可以使导弹能量消耗增大
+    3. 利用高度差增加导弹飞行距离
+    4. 在高度边界附近进行往复机动
     """
 
     # ========== 官方飞机参数 ==========
-    # 有人机
     MANNED_MIN_SPEED = 180          # 有人机最小速度 m/s
     MANNED_MAX_SPEED = 500          # 有人机最大速度 m/s
     MANNED_MIN_ALT = 2000           # 有人机最低高度 m
     MANNED_MAX_ALT = 7000           # 有人机最高高度 m
-    MANNED_MAX_LINEAR_ACC = 20      # 有人机最大线性加速度 m/s²
-    MANNED_MAX_RADIAL_ACC = 15      # 有人机最大径向加速度 m/s²
 
-    # 无人机
     UAV_MIN_SPEED = 120             # 无人机最小速度 m/s
     UAV_MAX_SPEED = 360             # 无人机最大速度 m/s
     UAV_MIN_ALT = 2000              # 无人机最低高度 m
     UAV_MAX_ALT = 7000              # 无人机最高高度 m
-    UAV_MAX_LINEAR_ACC = 20         # 无人机最大线性加速度 m/s²
-    UAV_MAX_RADIAL_ACC = 15         # 无人机最大径向加速度 m/s²
 
     # ========== 官方导弹参数 ==========
     MISSILE_SPEED = 1200            # 导弹平均速度 m/s
     MISSILE_MAX_FLIGHT_TIME = 60    # 导弹最长飞行时间 s
     MISSILE_MAX_RANGE = 72000       # 导弹最大飞行距离 m (72km)
-    MISSILE_KILL_RADIUS = 10        # 导弹杀伤半径 m
-    MISSILE_SEEKER_RANGE = 10       # 导引头引爆距离 m
-
-    # ========== 官方雷达参数 ==========
-    MANNED_RADAR_RANGE = 60000      # 有人机雷达探测距离 m (60km)
-    UAV_RADAR_RANGE = 40000         # 无人机雷达探测距离 m (40km)
-    RADAR_AZIMUTH_RANGE = 60        # 雷达方位范围 ±60°
-    MANNED_RADAR_PITCH_RANGE = 50   # 有人机雷达俯仰范围 ±50°
-    UAV_RADAR_PITCH_RANGE = 40      # 无人机雷达俯仰范围 ±40°
 
     # ========== 官方战场参数 ==========
     BATTLEFIELD_SIZE = 200000       # 任务区域大小 m (200km)
-    CENTER_RADIUS = 5000            # 中心区域半径 m (5km)
     INITIAL_ALTITUDE = 4000         # 初始部署高度 m
-    MISSION_DURATION = 900          # 想定时长 s (15分钟)
 
-    # ========== 威胁判断参数（基于官方导弹参数计算）==========
-    # 导弹最大射程72km，但实际有效拦截距离需考虑：
-    # - 导弹飞行时间60s，速度1200m/s
-    # - 飞机最大逃逸速度（有人机500m/s）
-    # - 导弹需要追踪转向消耗能量
-
-    # 威胁半径 = 导弹有效攻击距离（考虑飞机规避能力）
-    # 设定为导弹最大射程的一半左右，预留规避时间
+    # ========== 威胁判断参数 ==========
     MISSILE_THREAT_RADIUS = 50000       # 威胁半径50km（开始关注）
     MISSILE_DANGER_RADIUS = 35000       # 危险半径35km（积极规避）
     MISSILE_CRITICAL_RADIUS = 25000     # 紧急半径25km（全力规避）
     MISSILE_LETHAL_RADIUS = 12000       # 致命半径12km（极限规避）
+    MISSILE_THREAT_ANGLE = 75           # 导弹威胁角度
 
-    # 导弹威胁角度：导弹航向与目标夹角
-    # 雷达方位范围±60°，所以导弹也应该在这个范围内才有威胁
-    MISSILE_THREAT_ANGLE = 75           # 导弹威胁角度（略大于雷达方位范围）
-
-    # ========== 规避行为参数 ==========
-    # 规避速度：一律使用最大速度，不分威胁等级
-    # 有人机规避速度 - 全部使用最大速度500m/s
-    MANNED_EVADE_SPEED_NORMAL = 500     # 正常规避速度 (最大速度)
-    MANNED_EVADE_SPEED_DANGER = 500     # 危险规避速度 (最大速度)
-    MANNED_EVADE_SPEED_CRITICAL = 500   # 紧急规避速度 (最大速度)
-
-    # 无人机规避速度 - 全部使用最大速度360m/s
-    UAV_EVADE_SPEED_NORMAL = 360        # 正常规避速度 (最大速度)
-    UAV_EVADE_SPEED_DANGER = 360        # 危险规避速度 (最大速度)
-    UAV_EVADE_SPEED_CRITICAL = 360      # 紧急规避速度 (最大速度)
-
-    # 规避距离：规避目标点距当前位置的距离
-    # 基于导弹飞行时间和飞机速度计算
-    # 导弹飞行10km约需8.3s，飞机需要足够距离完成转向
-    EVADE_DISTANCE_NORMAL = 15          # 正常规避距离 km
-    EVADE_DISTANCE_DANGER = 20          # 危险规避距离 km
-    EVADE_DISTANCE_CRITICAL = 25        # 紧急规避距离 km
-
-    # ========== Cranking机动参数 ==========
-    # Cranking：向导弹反方向的斜后方飞行
-    # 角度越大越接近直接逃跑，角度越小越接近横向机动
-    # 最优Cranking角度约120-150°，能有效消耗导弹能量
-    CRANK_ANGLE_NORMAL = 120            # 正常Crank角度（向后斜飞120°）
-    CRANK_ANGLE_DANGER = 135            # 危险Crank角度（更向后135°）
-    CRANK_ANGLE_CRITICAL = 150          # 紧急Crank角度（几乎直接逃跑150°）
-    CRANK_ANGLE_LETHAL = 170            # 致命Crank角度（直接逃跑）
-
-    # ========== 高度规避参数 ==========
-    # 利用高度变化增加导弹追踪难度
-    # 高度范围：2000-7000m（官方限制）
-    ALTITUDE_CHANGE_NORMAL = 500        # 正常高度变化 m
-    ALTITUDE_CHANGE_DANGER = 800        # 危险高度变化 m
-    ALTITUDE_CHANGE_CRITICAL = 1200     # 紧急高度变化 m
-
+    # ========== 垂直躲避参数 ==========
     # 高度限制（官方参数）
     MIN_ALTITUDE = 2000                 # 最低飞行高度 m
     MAX_ALTITUDE = 7000                 # 最高飞行高度 m
+    MID_ALTITUDE = 4500                 # 中间高度 m
+
+    # 垂直躲避高度变化量（根据威胁等级）
+    VERTICAL_EVADE_NORMAL = 1500        # 正常威胁：变化1500m
+    VERTICAL_EVADE_DANGER = 2500        # 危险威胁：变化2500m
+    VERTICAL_EVADE_CRITICAL = 3500      # 紧急威胁：变化3500m
+    VERTICAL_EVADE_LETHAL = 4500        # 致命威胁：变化4500m（几乎到边界）
+
+    # 规避速度（使用最大速度）
+    MANNED_EVADE_SPEED = 500            # 有人机规避速度
+    UAV_EVADE_SPEED = 360               # 无人机规避速度
+
+    # 水平方向小幅度偏移（配合垂直机动）
+    HORIZONTAL_OFFSET_KM = 2            # 水平偏移距离 km
 
     # ========== 边界安全参数 ==========
-    # 战场边界安全边距
-    # 无人机/导弹出界立即销毁，有人机出界30秒销毁
-    # 设置10km安全边距确保规避时不会出界
-    BOUNDARY_MARGIN_KM = 10             # 边界安全边距 km
     BOUNDARY_MARGIN = 0.09              # 边界安全边距（经纬度，约10km）
 
     # ========== 调试参数 ==========
@@ -150,21 +98,20 @@ class ActionEvadeMissiles(Action):
 
     def tick(self, agent) -> str:
         """
-        执行导弹规避逻辑
+        执行垂直躲避逻辑
 
         优先级：
         1. 检测所有来袭导弹
         2. 评估每个己方单位的威胁等级
-        3. 计算最优规避方向（Cranking机动）
-        4. 执行规避机动
+        3. 计算垂直规避方向（上升/下降）
+        4. 执行垂直规避机动
         """
-        # 调试输出
         if self.DEBUG_ENABLED:
             if not hasattr(agent, '_missile_debug_frame'):
                 agent._missile_debug_frame = 0
             if agent.frame_count - agent._missile_debug_frame >= self.DEBUG_INTERVAL:
                 agent._missile_debug_frame = agent.frame_count
-                print(f"[导弹规避] Frame {agent.frame_count}: 检测到 {len(agent.enemy_missiles)} 枚敌方导弹")
+                print(f"[垂直躲避] Frame {agent.frame_count}: 检测到 {len(agent.enemy_missiles)} 枚敌方导弹")
 
         # 无导弹则返回成功
         if not agent.enemy_missiles:
@@ -178,11 +125,11 @@ class ActionEvadeMissiles(Action):
         # 对每个己方单位进行威胁评估和规避
         evade_count = 0
         for unit in agent.own_units:
-            if self._process_unit_evasion(agent, unit, all_missiles):
+            if self._process_vertical_evasion(agent, unit, all_missiles):
                 evade_count += 1
 
         if self.DEBUG_ENABLED and evade_count > 0:
-            print(f"[导弹规避] Frame {agent.frame_count}: {evade_count} 个单位执行规避机动")
+            print(f"[垂直躲避] Frame {agent.frame_count}: {evade_count} 个单位执行垂直规避")
 
         return NodeStatus.SUCCESS
 
@@ -207,9 +154,9 @@ class ActionEvadeMissiles(Action):
                 })
         return missiles
 
-    def _process_unit_evasion(self, agent, unit, all_missiles):
+    def _process_vertical_evasion(self, agent, unit, all_missiles):
         """
-        处理单个单位的规避逻辑
+        处理单个单位的垂直躲避逻辑
 
         返回: True如果执行了规避，False否则
         """
@@ -223,59 +170,52 @@ class ActionEvadeMissiles(Action):
             return False
 
         # 分析威胁导弹
-        threat_info = self._analyze_threats(u_lon, u_lat, all_missiles)
+        threat_info = self._analyze_threats(u_lon, u_lat, u_alt, all_missiles)
 
         if not threat_info['threats']:
             return False
 
-        # 确定威胁等级和规避参数
-        evade_params = self._get_evade_params(threat_info, is_manned)
+        # 确定威胁等级和垂直规避参数
+        evade_params = self._get_vertical_evade_params(threat_info, u_alt, is_manned)
 
-        # 计算Cranking规避方向
-        evade_direction = self._calculate_crank_direction(
-            u_lon, u_lat,
-            threat_info['primary_threat'],
-            evade_params['crank_angle'],
-            agent
-        )
-
-        # 计算规避目标点
-        evade_lon, evade_lat = self._calculate_evade_point(
-            u_lon, u_lat, u_lat,
-            evade_direction,
-            evade_params['distance'],
-            agent
-        )
-
-        # 计算规避高度
-        evade_alt = self._calculate_evade_altitude(
+        # 计算目标高度（垂直躲避核心）
+        target_alt = self._calculate_vertical_evade_altitude(
             u_alt,
-            threat_info['min_dist'],
+            threat_info['primary_threat'],
             evade_params['alt_change'],
             is_manned,
             unit_name
         )
 
-        # 执行规避
+        # 计算小幅度水平偏移（配合垂直机动）
+        evade_lon, evade_lat = self._calculate_horizontal_offset(
+            u_lon, u_lat,
+            threat_info['primary_threat'],
+            agent
+        )
+
+        # 执行垂直躲避
+        speed = self.MANNED_EVADE_SPEED if is_manned else self.UAV_EVADE_SPEED
         agent.add_action(
-            decCmd.fly_to_point(unit_name, (evade_lat, evade_lon, evade_alt), evade_params['speed']),
+            decCmd.fly_to_point(unit_name, (evade_lat, evade_lon, target_alt), speed),
             unit_name
         )
 
         # 调试输出
         if self.DEBUG_ENABLED:
             level = evade_params['level']
-            print(f"[规避执行] [{level}] {unit_name}: "
+            direction = "上升" if target_alt > u_alt else "下降"
+            alt_change = abs(target_alt - u_alt)
+            print(f"[垂直躲避] [{level}] {unit_name}: "
                   f"距离={threat_info['min_dist']:.0f}m, "
-                  f"Crank={evade_params['crank_angle']}°, "
-                  f"速度={evade_params['speed']}m/s, "
-                  f"目标=({evade_lat:.4f}, {evade_lon:.4f}, {evade_alt:.0f}m)")
+                  f"{direction}{alt_change:.0f}m, "
+                  f"目标高度={target_alt:.0f}m")
 
         return True
 
-    def _analyze_threats(self, u_lon, u_lat, all_missiles):
+    def _analyze_threats(self, u_lon, u_lat, u_alt, all_missiles):
         """
-        分析导弹威胁
+        分析导弹威胁（包含高度信息）
 
         返回: {
             'threats': 威胁导弹列表,
@@ -288,10 +228,13 @@ class ActionEvadeMissiles(Action):
         primary_threat = None
 
         for missile in all_missiles:
-            dist = YxGeoUtils.haversine_distance(u_lon, u_lat, missile['lon'], missile['lat'])
+            # 计算三维距离
+            horizontal_dist = YxGeoUtils.haversine_distance(u_lon, u_lat, missile['lon'], missile['lat'])
+            vertical_dist = abs(u_alt - missile['altitude'])
+            dist_3d = math.sqrt(horizontal_dist**2 + vertical_dist**2)
 
             # 超出威胁半径则忽略
-            if dist > self.MISSILE_THREAT_RADIUS:
+            if horizontal_dist > self.MISSILE_THREAT_RADIUS:
                 continue
 
             # 计算导弹航向与目标的夹角
@@ -304,14 +247,16 @@ class ActionEvadeMissiles(Action):
             if angle_diff < self.MISSILE_THREAT_ANGLE:
                 threat = {
                     **missile,
-                    'dist': dist,
+                    'dist': horizontal_dist,
+                    'dist_3d': dist_3d,
+                    'vertical_dist': vertical_dist,
                     'bearing_to_unit': bearing_to_unit,
                     'angle_diff': angle_diff
                 }
                 threats.append(threat)
 
-                if dist < min_dist:
-                    min_dist = dist
+                if horizontal_dist < min_dist:
+                    min_dist = horizontal_dist
                     primary_threat = threat
 
         return {
@@ -320,134 +265,111 @@ class ActionEvadeMissiles(Action):
             'min_dist': min_dist if threats else float('inf')
         }
 
-    def _get_evade_params(self, threat_info, is_manned):
+    def _get_vertical_evade_params(self, threat_info, current_alt, is_manned):
         """
-        根据威胁等级获取规避参数
+        根据威胁等级获取垂直规避参数
 
         威胁等级：
-        - LETHAL: < 8km (致命)
-        - CRITICAL: < 15km (紧急)
-        - DANGER: < 25km (危险)
-        - NORMAL: < 40km (正常)
+        - LETHAL: < 12km (致命) -> 最大高度变化
+        - CRITICAL: < 25km (紧急) -> 大幅高度变化
+        - DANGER: < 35km (危险) -> 中等高度变化
+        - NORMAL: < 50km (正常) -> 小幅高度变化
         """
         min_dist = threat_info['min_dist']
 
         if min_dist < self.MISSILE_LETHAL_RADIUS:
-            # 致命威胁：全力逃跑
             return {
                 'level': '致命',
-                'speed': self.MANNED_MAX_SPEED if is_manned else self.UAV_MAX_SPEED,
-                'distance': self.EVADE_DISTANCE_CRITICAL,
-                'crank_angle': self.CRANK_ANGLE_LETHAL,
-                'alt_change': self.ALTITUDE_CHANGE_CRITICAL
+                'alt_change': self.VERTICAL_EVADE_LETHAL
             }
         elif min_dist < self.MISSILE_CRITICAL_RADIUS:
-            # 紧急威胁
             return {
                 'level': '紧急',
-                'speed': self.MANNED_EVADE_SPEED_CRITICAL if is_manned else self.UAV_EVADE_SPEED_CRITICAL,
-                'distance': self.EVADE_DISTANCE_CRITICAL,
-                'crank_angle': self.CRANK_ANGLE_CRITICAL,
-                'alt_change': self.ALTITUDE_CHANGE_CRITICAL
+                'alt_change': self.VERTICAL_EVADE_CRITICAL
             }
         elif min_dist < self.MISSILE_DANGER_RADIUS:
-            # 危险威胁
             return {
                 'level': '危险',
-                'speed': self.MANNED_EVADE_SPEED_DANGER if is_manned else self.UAV_EVADE_SPEED_DANGER,
-                'distance': self.EVADE_DISTANCE_DANGER,
-                'crank_angle': self.CRANK_ANGLE_DANGER,
-                'alt_change': self.ALTITUDE_CHANGE_DANGER
+                'alt_change': self.VERTICAL_EVADE_DANGER
             }
         else:
-            # 正常威胁
             return {
                 'level': '正常',
-                'speed': self.MANNED_EVADE_SPEED_NORMAL if is_manned else self.UAV_EVADE_SPEED_NORMAL,
-                'distance': self.EVADE_DISTANCE_NORMAL,
-                'crank_angle': self.CRANK_ANGLE_NORMAL,
-                'alt_change': self.ALTITUDE_CHANGE_NORMAL
+                'alt_change': self.VERTICAL_EVADE_NORMAL
             }
 
-    def _calculate_crank_direction(self, u_lon, u_lat, primary_threat, crank_angle, agent):
+    def _calculate_vertical_evade_altitude(self, current_alt, primary_threat, alt_change, is_manned, unit_name):
         """
-        计算Cranking机动方向
+        计算垂直躲避目标高度
 
-        Cranking原理：
-        - 不是直接逃跑（180°），而是斜向后方飞行
-        - 这样可以保持一定的雷达视野，同时迫使导弹转向
-        - 导弹转向会消耗能量，降低其速度和射程
+        策略：
+        1. 如果导弹在我方上方，则下降躲避
+        2. 如果导弹在我方下方，则上升躲避
+        3. 如果导弹高度相近，根据当前高度选择最大变化方向
+        4. 优先利用高度边界（2000m或7000m）
+        """
+        min_alt = self.MIN_ALTITUDE
+        max_alt = self.MAX_ALTITUDE
+        missile_alt = primary_threat['altitude']
 
-        选择左Crank还是右Crank：
-        - 选择离边界更远的方向
-        - 选择更靠近战场中心的方向
+        # 计算与导弹的高度差
+        alt_diff = current_alt - missile_alt
+
+        # 计算上升和下降的可用空间
+        space_up = max_alt - current_alt
+        space_down = current_alt - min_alt
+
+        # 决定躲避方向
+        if abs(alt_diff) > 500:
+            # 导弹明显不在同一高度，向反方向躲避
+            if alt_diff > 0:
+                # 我方在上，导弹在下，继续上升
+                target_alt = current_alt + alt_change
+            else:
+                # 我方在下，导弹在上，继续下降
+                target_alt = current_alt - alt_change
+        else:
+            # 导弹高度相近，选择可用空间更大的方向
+            if space_up >= space_down:
+                # 上方空间大，上升
+                target_alt = current_alt + alt_change
+            else:
+                # 下方空间大，下降
+                target_alt = current_alt - alt_change
+
+        # 应用高度限制
+        target_alt = max(min_alt, min(max_alt, target_alt))
+
+        # 如果接近边界，尝试往复机动
+        if target_alt <= min_alt + 200:
+            # 已到下边界，下次会上升
+            target_alt = min_alt
+        elif target_alt >= max_alt - 200:
+            # 已到上边界，下次会下降
+            target_alt = max_alt
+
+        return target_alt
+
+    def _calculate_horizontal_offset(self, u_lon, u_lat, primary_threat, agent):
+        """
+        计算水平方向小幅度偏移（配合垂直机动）
+
+        向导弹来袭方向的垂直方向偏移，增加导弹追踪难度
         """
         missile_heading = primary_threat['heading']
 
-        # 计算逃跑方向（导弹航向的反方向）
-        away_dir = (missile_heading + 180) % 360
+        # 计算垂直于导弹航向的方向（左或右偏90度）
+        perpendicular_left = (missile_heading - 90) % 360
+        perpendicular_right = (missile_heading + 90) % 360
 
-        # 计算左右Crank方向
-        # Crank角度是相对于逃跑方向的偏转
-        half_crank = (180 - crank_angle) / 2
-        left_crank = (away_dir - half_crank) % 360
-        right_crank = (away_dir + half_crank) % 360
+        # 选择离边界更远的方向
+        left_score = self._evaluate_direction(u_lon, u_lat, perpendicular_left, agent)
+        right_score = self._evaluate_direction(u_lon, u_lat, perpendicular_right, agent)
 
-        # 评估两个方向
-        left_score = self._evaluate_evade_direction(u_lon, u_lat, left_crank, agent)
-        right_score = self._evaluate_evade_direction(u_lon, u_lat, right_crank, agent)
+        offset_direction = perpendicular_left if left_score >= right_score else perpendicular_right
 
-        return left_crank if left_score >= right_score else right_crank
-
-    def _evaluate_evade_direction(self, u_lon, u_lat, direction, agent):
-        """
-        评估规避方向的优劣
-
-        评分标准：
-        1. 边界安全性（不会飞出战场）
-        2. 距离战场中心的远近
-
-        返回: 评分（越高越好）
-        """
-        # 计算沿该方向飞行20km后的位置
-        test_dist = 20  # km
-        lon_off, lat_off = YxGeoUtils.km_to_lon_lat(u_lat, test_dist, direction)
-        target_lon = u_lon + lon_off
-        target_lat = u_lat + lat_off
-
-        score = 100  # 基础分
-
-        # 边界安全性检查
-        bf = agent.battlefield
-        if bf.get('min_lon') is not None:
-            margin = self.BOUNDARY_MARGIN
-
-            # 检查是否在安全边界内
-            if not (bf['min_lon'] + margin < target_lon < bf['max_lon'] - margin and
-                    bf['min_lat'] + margin < target_lat < bf['max_lat'] - margin):
-                score -= 50  # 接近边界扣分
-
-            # 计算到边界的最小距离并加分
-            dist_to_min_lon = target_lon - bf['min_lon']
-            dist_to_max_lon = bf['max_lon'] - target_lon
-            dist_to_min_lat = target_lat - bf['min_lat']
-            dist_to_max_lat = bf['max_lat'] - target_lat
-            min_boundary_dist = min(dist_to_min_lon, dist_to_max_lon, dist_to_min_lat, dist_to_max_lat)
-            score += min_boundary_dist * 10  # 离边界越远越好
-
-        # 距离战场中心的评分
-        dist_to_center = abs(target_lat - agent.center_lat) + abs(target_lon - agent.center_lon)
-        score -= dist_to_center * 5  # 离中心越近越好（保持战场控制）
-
-        return score
-
-    def _calculate_evade_point(self, u_lon, u_lat, ref_lat, direction, distance_km, agent):
-        """
-        计算规避目标点
-
-        确保目标点在战场边界内
-        """
-        lon_off, lat_off = YxGeoUtils.km_to_lon_lat(ref_lat, distance_km, direction)
+        # 计算偏移后的位置
+        lon_off, lat_off = YxGeoUtils.km_to_lon_lat(u_lat, self.HORIZONTAL_OFFSET_KM, offset_direction)
         evade_lon = u_lon + lon_off
         evade_lat = u_lat + lat_off
 
@@ -460,93 +382,430 @@ class ActionEvadeMissiles(Action):
 
         return evade_lon, evade_lat
 
-    def _calculate_evade_altitude(self, current_alt, threat_dist, alt_change, is_manned, unit_name):
-        """
-        计算规避高度
+    def _evaluate_direction(self, u_lon, u_lat, direction, agent):
+        """评估水平偏移方向的优劣"""
+        test_dist = 5  # km
+        lon_off, lat_off = YxGeoUtils.km_to_lon_lat(u_lat, test_dist, direction)
+        target_lon = u_lon + lon_off
+        target_lat = u_lat + lat_off
 
-        高度变化策略：
-        1. 紧急情况下快速变化高度
-        2. 交替上升/下降避免被预测
-        3. 严格遵守高度限制（2000-7000m）
-        """
-        min_alt = self.MIN_ALTITUDE
-        max_alt = self.MAX_ALTITUDE
+        score = 100
 
-        # 根据单位名称决定升降方向（简单的奇偶分配）
-        # 这样编队内的飞机会向不同方向分散
-        go_down = unit_name.endswith(('1', '3', '5', '7', '9'))
-
-        # 致命威胁时优先下降（利用地面杂波干扰导弹）
-        if threat_dist < self.MISSILE_LETHAL_RADIUS:
-            target_alt = current_alt - alt_change
-        elif go_down:
-            target_alt = current_alt - alt_change
-        else:
-            target_alt = current_alt + alt_change
-
-        # 应用高度限制
-        target_alt = max(min_alt, min(max_alt, target_alt))
-
-        return target_alt
-
-    def _check_boundary_safe(self, lon, lat, agent):
-        """检查坐标是否在安全边界内"""
         bf = agent.battlefield
-        if bf.get('min_lon') is None:
-            return True
-        margin = self.BOUNDARY_MARGIN
-        return (bf['min_lon'] + margin < lon < bf['max_lon'] - margin and
-                bf['min_lat'] + margin < lat < bf['max_lat'] - margin)
+        if bf.get('min_lon') is not None:
+            margin = self.BOUNDARY_MARGIN
+            if not (bf['min_lon'] + margin < target_lon < bf['max_lon'] - margin and
+                    bf['min_lat'] + margin < target_lat < bf['max_lat'] - margin):
+                score -= 50
+
+        return score
 
 
 class ActionEvadeMissilesAdvanced(ActionEvadeMissiles):
     """
-    高级导弹规避策略
+    高级垂直躲避策略
 
-    在基础规避策略上增加：
-    1. 多导弹威胁综合评估
-    2. 编队协同规避
-    3. 诱饵战术（无人机为有人机挡弹）
+    在基础垂直躲避策略上增加：
+    1. 有人机优先保护（更早开始规避）
+    2. 编队高度分层（避免碰撞）
     """
 
-    # 有人机保护优先级
     PROTECT_MANNED_PRIORITY = True
 
-    # 无人机诱饵距离：无人机在有人机前方多远吸引导弹
-    DECOY_DISTANCE = 5000  # m
-
-    def _process_unit_evasion(self, agent, unit, all_missiles):
+    def _process_vertical_evasion(self, agent, unit, all_missiles):
         """
-        增强版规避处理
+        增强版垂直躲避处理
 
-        对于有人机：优先保护
-        对于无人机：可以作为诱饵
+        对于有人机：更早开始规避
         """
         is_manned = unit.get('type') == '有人机'
 
         if is_manned and self.PROTECT_MANNED_PRIORITY:
-            # 有人机使用更保守的规避策略
-            return self._process_manned_evasion(agent, unit, all_missiles)
+            return self._process_manned_vertical_evasion(agent, unit, all_missiles)
         else:
-            # 无人机使用标准规避
-            return super()._process_unit_evasion(agent, unit, all_missiles)
+            return super()._process_vertical_evasion(agent, unit, all_missiles)
 
-    def _process_manned_evasion(self, agent, unit, all_missiles):
+    def _process_manned_vertical_evasion(self, agent, unit, all_missiles):
         """
-        有人机专用规避策略
+        有人机专用垂直躲避策略
 
         特点：
         1. 更早开始规避（威胁半径增大20%）
-        2. 更激进的规避角度
-        3. 优先保持在无人机后方
+        2. 更大的高度变化量
         """
-        # 增大有人机的威胁感知半径
         original_threat_radius = self.MISSILE_THREAT_RADIUS
         self.MISSILE_THREAT_RADIUS = int(original_threat_radius * 1.2)
 
-        result = super()._process_unit_evasion(agent, unit, all_missiles)
+        result = super()._process_vertical_evasion(agent, unit, all_missiles)
 
-        # 恢复原始参数
         self.MISSILE_THREAT_RADIUS = original_threat_radius
 
         return result
+
+
+class ActionTacticalEvasion(ActionEvadeMissiles):
+    """
+    战术垂直躲避 - 多导弹综合规避策略
+
+    核心功能：
+    1. 检测1-4发来袭导弹
+    2. 计算所有导弹的综合威胁方向和高度
+    3. 计算最优垂直躲避角度，尽可能实现垂直躲避
+    4. 配合小幅度水平机动增加规避效果
+
+    垂直躲避优势：
+    - 导弹在垂直方向的机动性相对较弱
+    - 快速改变高度可以增加导弹追踪难度
+    - 利用高度边界（2000m/7000m）进行极限规避
+    """
+
+    # ========== 多导弹检测参数 ==========
+    MULTI_MISSILE_DETECTION_RANGE = 50000   # 检测范围 (50km)
+    MAX_MISSILES_TO_TRACK = 4               # 最多跟踪4发导弹
+    MIN_MISSILES_FOR_TACTICAL = 1           # 至少1发导弹触发战术躲避
+
+    # ========== 战术垂直躲避参数 ==========
+    # 根据导弹数量调整高度变化量
+    ALTITUDE_CHANGE_1_MISSILE = 2500        # 1发导弹：变化2500m
+    ALTITUDE_CHANGE_2_MISSILES = 3500       # 2发导弹：变化3500m
+    ALTITUDE_CHANGE_3_MISSILES = 4000       # 3发导弹：变化4000m
+    ALTITUDE_CHANGE_4_MISSILES = 4500       # 4发导弹：变化4500m（极限）
+
+    TACTICAL_SPEED_MANNED = 500             # 有人机战术机动速度
+    TACTICAL_SPEED_UAV = 360                # 无人机战术机动速度
+
+    # ========== 综合躲避角度计算参数 ==========
+    # 水平偏移距离（配合垂直机动）
+    HORIZONTAL_EVADE_DISTANCE_KM = 3        # 水平躲避距离 km
+
+    # 威胁权重：距离越近权重越大
+    DISTANCE_WEIGHT_FACTOR = 1.5            # 距离权重因子
+
+    DEBUG_TACTICAL = False
+
+    def tick(self, agent) -> str:
+        """
+        执行多导弹综合垂直躲避
+
+        优先级：
+        1. 检测1-4发来袭导弹
+        2. 计算综合躲避方向
+        3. 执行垂直躲避机动
+        4. 无导弹威胁时执行常规逻辑
+        """
+        # 无导弹则直接返回
+        if not agent.enemy_missiles:
+            return NodeStatus.SUCCESS
+
+        # 对每个己方单位进行多导弹威胁分析和规避
+        for unit in agent.own_units:
+            missile_threat = self._detect_multi_missile_threat(agent, unit)
+
+            if missile_threat['has_threat']:
+                self._execute_multi_missile_vertical_evasion(agent, unit, missile_threat)
+
+        return NodeStatus.SUCCESS
+
+    def _detect_multi_missile_threat(self, agent, unit):
+        """
+        检测多导弹威胁（1-4发）
+
+        分析所有来袭导弹，计算综合威胁信息
+
+        返回: {
+            'has_threat': bool,
+            'missiles': 威胁导弹列表（最多4发，按距离排序）,
+            'missile_count': 导弹数量,
+            'weighted_avg_altitude': 加权平均高度,
+            'weighted_avg_bearing': 加权平均来袭方向,
+            'min_distance': 最近导弹距离,
+            'composite_evade_direction': 综合躲避方向
+        }
+        """
+        unit_name = unit['name']
+        u_lon = unit.get('longitude', 0)
+        u_lat = unit.get('latitude', 0)
+        u_alt = unit.get('altitude', self.INITIAL_ALTITUDE)
+
+        if not u_lon or not u_lat:
+            return {'has_threat': False}
+
+        # 收集威胁导弹
+        threatening_missiles = []
+
+        for missile in agent.enemy_missiles:
+            m_lon = missile.get('longitude', 0)
+            m_lat = missile.get('latitude', 0)
+            m_heading = math.degrees(missile.get('heading', 0)) % 360
+            m_alt = missile.get('altitude', self.INITIAL_ALTITUDE)
+            m_speed = missile.get('speed', self.MISSILE_SPEED)
+
+            if not m_lon or not m_lat:
+                continue
+
+            # 计算距离
+            dist = YxGeoUtils.haversine_distance(u_lon, u_lat, m_lon, m_lat)
+
+            if dist > self.MULTI_MISSILE_DETECTION_RANGE:
+                continue
+
+            # 计算导弹是否指向我方
+            bearing_to_me = YxGeoUtils.calculate_bearing(m_lon, m_lat, u_lon, u_lat)
+            targeting_angle = abs((bearing_to_me - m_heading + 180) % 360 - 180)
+
+            # 只考虑指向我方的导弹（威胁角度内）
+            if targeting_angle < self.MISSILE_THREAT_ANGLE:
+                # 计算导弹相对我方的来袭方向
+                bearing_from_me = YxGeoUtils.calculate_bearing(u_lon, u_lat, m_lon, m_lat)
+
+                threatening_missiles.append({
+                    'lon': m_lon,
+                    'lat': m_lat,
+                    'altitude': m_alt,
+                    'heading': m_heading,
+                    'speed': m_speed,
+                    'distance': dist,
+                    'bearing_from_me': bearing_from_me,
+                    'targeting_angle': targeting_angle,
+                    'id': missile.get('target_id') or missile.get('name') or id(missile)
+                })
+
+        if len(threatening_missiles) < self.MIN_MISSILES_FOR_TACTICAL:
+            return {'has_threat': False}
+
+        # 按距离排序，只保留最近的4发
+        threatening_missiles.sort(key=lambda x: x['distance'])
+        threatening_missiles = threatening_missiles[:self.MAX_MISSILES_TO_TRACK]
+
+        missile_count = len(threatening_missiles)
+        min_distance = threatening_missiles[0]['distance']
+
+        # 计算加权平均高度和来袭方向
+        # 权重：距离越近权重越大 (weight = 1 / distance^factor)
+        total_weight = 0
+        weighted_alt_sum = 0
+        weighted_bearing_x = 0  # 用于向量平均
+        weighted_bearing_y = 0
+
+        for m in threatening_missiles:
+            # 距离权重（距离越近权重越大）
+            weight = 1.0 / (m['distance'] ** self.DISTANCE_WEIGHT_FACTOR)
+            total_weight += weight
+
+            # 加权高度
+            weighted_alt_sum += m['altitude'] * weight
+
+            # 加权方向（使用向量平均避免角度跨越问题）
+            bearing_rad = math.radians(m['bearing_from_me'])
+            weighted_bearing_x += math.cos(bearing_rad) * weight
+            weighted_bearing_y += math.sin(bearing_rad) * weight
+
+        weighted_avg_altitude = weighted_alt_sum / total_weight
+        weighted_avg_bearing = math.degrees(math.atan2(weighted_bearing_y, weighted_bearing_x)) % 360
+
+        # 计算综合躲避方向（导弹来袭方向的反方向，垂直偏移90度）
+        # 主要靠垂直躲避，水平方向只做小幅度偏移
+        evade_horizontal_dir = (weighted_avg_bearing + 180) % 360  # 反方向
+        # 选择左偏或右偏90度，远离导弹
+        evade_perpendicular_left = (evade_horizontal_dir - 90) % 360
+        evade_perpendicular_right = (evade_horizontal_dir + 90) % 360
+
+        if self.DEBUG_TACTICAL:
+            print(f"[多导弹躲避] {unit_name} 检测到 {missile_count} 发导弹威胁!")
+            for i, m in enumerate(threatening_missiles):
+                print(f"  - 导弹{i+1}: 距离={m['distance']/1000:.1f}km, "
+                      f"高度={m['altitude']:.0f}m, 来袭方向={m['bearing_from_me']:.1f}°")
+            print(f"  - 加权平均高度: {weighted_avg_altitude:.0f}m")
+            print(f"  - 加权平均来袭方向: {weighted_avg_bearing:.1f}°")
+
+        return {
+            'has_threat': True,
+            'missiles': threatening_missiles,
+            'missile_count': missile_count,
+            'weighted_avg_altitude': weighted_avg_altitude,
+            'weighted_avg_bearing': weighted_avg_bearing,
+            'min_distance': min_distance,
+            'evade_perpendicular_left': evade_perpendicular_left,
+            'evade_perpendicular_right': evade_perpendicular_right,
+            'my_altitude': u_alt
+        }
+
+    def _execute_multi_missile_vertical_evasion(self, agent, unit, threat_info):
+        """
+        执行多导弹综合垂直躲避
+
+        策略：
+        1. 根据导弹数量决定高度变化量
+        2. 根据导弹加权平均高度决定躲避方向（上升/下降）
+        3. 计算最优垂直躲避高度
+        4. 配合小幅度水平偏移
+        """
+        unit_name = unit['name']
+        u_lon = unit.get('longitude', 0)
+        u_lat = unit.get('latitude', 0)
+        u_alt = unit.get('altitude', self.INITIAL_ALTITUDE)
+        is_manned = unit.get('type') == '有人机'
+
+        missile_count = threat_info['missile_count']
+        weighted_avg_alt = threat_info['weighted_avg_altitude']
+        min_distance = threat_info['min_distance']
+
+        # 根据导弹数量决定高度变化量
+        if missile_count >= 4:
+            alt_change = self.ALTITUDE_CHANGE_4_MISSILES
+        elif missile_count >= 3:
+            alt_change = self.ALTITUDE_CHANGE_3_MISSILES
+        elif missile_count >= 2:
+            alt_change = self.ALTITUDE_CHANGE_2_MISSILES
+        else:
+            alt_change = self.ALTITUDE_CHANGE_1_MISSILE
+
+        # 根据距离调整高度变化量（距离越近变化越大）
+        if min_distance < self.MISSILE_LETHAL_RADIUS:
+            alt_change = min(self.MAX_ALTITUDE - self.MIN_ALTITUDE, alt_change * 1.2)
+        elif min_distance < self.MISSILE_CRITICAL_RADIUS:
+            alt_change = alt_change * 1.1
+
+        # 决定垂直躲避方向
+        target_alt, direction = self._calculate_optimal_vertical_evade(
+            u_alt, weighted_avg_alt, alt_change, threat_info['missiles']
+        )
+
+        # 计算水平偏移方向和位置
+        evade_lon, evade_lat = self._calculate_composite_horizontal_offset(
+            u_lon, u_lat, threat_info, agent
+        )
+
+        speed = self.TACTICAL_SPEED_MANNED if is_manned else self.TACTICAL_SPEED_UAV
+
+        # 执行综合垂直躲避
+        agent.add_action(
+            decCmd.fly_to_point(unit_name, (evade_lat, evade_lon, target_alt), speed),
+            unit_name
+        )
+
+        if self.DEBUG_TACTICAL:
+            print(f"[多导弹躲避] {unit_name} 执行{direction}")
+            print(f"  - 当前高度: {u_alt:.0f}m -> 目标高度: {target_alt:.0f}m")
+            print(f"  - 高度变化: {abs(target_alt - u_alt):.0f}m")
+            print(f"  - 导弹数量: {missile_count}, 最近距离: {min_distance/1000:.1f}km")
+
+    def _calculate_optimal_vertical_evade(self, current_alt, weighted_avg_missile_alt, alt_change, missiles):
+        """
+        计算最优垂直躲避高度
+
+        策略：
+        1. 分析所有导弹的高度分布
+        2. 选择远离导弹密集区域的方向
+        3. 优先利用高度边界进行极限规避
+        4. 考虑上升/下降空间选择最优方向
+
+        返回: (target_altitude, direction_description)
+        """
+        min_alt = self.MIN_ALTITUDE
+        max_alt = self.MAX_ALTITUDE
+
+        # 统计导弹在上方和下方的数量和威胁
+        missiles_above = 0
+        missiles_below = 0
+        threat_above = 0  # 上方导弹的威胁度（距离越近越高）
+        threat_below = 0
+
+        for m in missiles:
+            if m['altitude'] > current_alt:
+                missiles_above += 1
+                threat_above += 1.0 / m['distance']
+            else:
+                missiles_below += 1
+                threat_below += 1.0 / m['distance']
+
+        # 计算上升和下降的可用空间
+        space_up = max_alt - current_alt
+        space_down = current_alt - min_alt
+
+        # 决策逻辑：
+        # 1. 如果一侧导弹明显更多/威胁更大，向另一侧躲避
+        # 2. 如果两侧相近，选择空间更大的方向
+        # 3. 如果接近边界，利用边界进行极限规避
+
+        # 计算上升和下降的得分
+        score_up = 0
+        score_down = 0
+
+        # 导弹分布得分（远离导弹密集区域）
+        if missiles_above > missiles_below:
+            score_down += 30
+        elif missiles_below > missiles_above:
+            score_up += 30
+
+        # 威胁度得分（远离威胁更大的方向）
+        if threat_above > threat_below * 1.2:
+            score_down += 40
+        elif threat_below > threat_above * 1.2:
+            score_up += 40
+
+        # 空间得分（选择空间更大的方向）
+        score_up += (space_up / 5000) * 20  # 最多20分
+        score_down += (space_down / 5000) * 20
+
+        # 加权平均高度得分（远离导弹平均高度）
+        if weighted_avg_missile_alt > current_alt:
+            score_down += 25
+        else:
+            score_up += 25
+
+        # 决定方向
+        if score_up >= score_down:
+            target_alt = current_alt + alt_change
+            direction = "上升"
+        else:
+            target_alt = current_alt - alt_change
+            direction = "下降"
+
+        # 应用高度限制
+        target_alt = max(min_alt, min(max_alt, target_alt))
+
+        # 极限规避：如果接近边界，直接到达边界
+        if target_alt <= min_alt + 300:
+            target_alt = min_alt
+            direction = "极限俯冲"
+        elif target_alt >= max_alt - 300:
+            target_alt = max_alt
+            direction = "极限爬升"
+
+        return target_alt, direction
+
+    def _calculate_composite_horizontal_offset(self, u_lon, u_lat, threat_info, agent):
+        """
+        计算综合水平偏移（配合垂直机动）
+
+        策略：
+        1. 选择垂直于导弹加权平均来袭方向的偏移
+        2. 选择离边界更远、更安全的方向
+        3. 保持小幅度偏移，主要依靠垂直躲避
+        """
+        # 评估左右偏移方向
+        left_dir = threat_info['evade_perpendicular_left']
+        right_dir = threat_info['evade_perpendicular_right']
+
+        left_score = self._evaluate_direction(u_lon, u_lat, left_dir, agent)
+        right_score = self._evaluate_direction(u_lon, u_lat, right_dir, agent)
+
+        # 选择得分更高的方向
+        offset_direction = left_dir if left_score >= right_score else right_dir
+
+        # 计算偏移后的位置
+        lon_off, lat_off = YxGeoUtils.km_to_lon_lat(
+            u_lat, self.HORIZONTAL_EVADE_DISTANCE_KM, offset_direction
+        )
+        evade_lon = u_lon + lon_off
+        evade_lat = u_lat + lat_off
+
+        # 边界约束
+        bf = agent.battlefield
+        if bf.get('min_lon') is not None:
+            margin = self.BOUNDARY_MARGIN
+            evade_lon = max(bf['min_lon'] + margin, min(bf['max_lon'] - margin, evade_lon))
+            evade_lat = max(bf['min_lat'] + margin, min(bf['max_lat'] - margin, evade_lat))
+
+        return evade_lon, evade_lat

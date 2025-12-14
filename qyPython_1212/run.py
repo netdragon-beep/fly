@@ -4,7 +4,7 @@ from env.multi_env import auto_engage_main_multi
 from env.agent.demo.demo_auto_agent import DemoAutoAgent
 from env.agent.demo.demo_teaming_agent import DemoTeamingAgent
 from env.agent.策略树.Behavior_Tree_auto import BTDemoAgent  # 行为树智能体
-from env.agent.策略树copy.Behavior_Tree_auto import BTDemoAgent  as BTDemoAgent_copy# 行为树智能体
+# from env.agent.策略树.Behavior_Tree_auto import BTDemoAgent  as BTDemoAgent_copy# 行为树智能体
 # from env.agent.test1.test1_auto_agent import FlyTeamAutoAgent
 # from env.agent.test1.test1_teaming_agent import FlyTeamTeamingAgent
 from utilities.yxHttp import YxHttpRequest as yxHttp
@@ -17,7 +17,7 @@ if __name__ == '__main__':
         # 红方使用行为树智能体，蓝方使用官方demo
         red_agent = BTDemoAgent('red', "red_bt")
         # blue_agent = DemoAutoAgent('blue', "blue_demo")
-        blue_agent = BTDemoAgent_copy('blue', "blue_demo")
+        blue_agent = DemoAutoAgent('blue', "blue_demo")
         # # 新智能体
         if config.is_single_instance:
             auto_engage_main(red_agent, blue_agent)

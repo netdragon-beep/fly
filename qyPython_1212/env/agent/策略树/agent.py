@@ -1,7 +1,9 @@
 """
-主智能体类 (BTDemoAgent)
+主智能体类 (BTDemoAgent) - V1版本（保守速度策略）
 
 基于行为树的战斗AI智能体
+
+与主版本的区别：使用V1躲避机制（根据威胁等级使用不同速度80%-100%）
 """
 
 import math
@@ -16,7 +18,8 @@ from .actions import (
     ActionResetFrame,
     ConditionCheckInitialDeployment,
     ActionExecuteDeployment,
-    ActionEvadeMissilesAdvanced,
+    ActionEvadeMissilesAdvanced,  # 使用V1版本躲避机制
+    ActionTacticalEvasion,        # 新增：智能战术躲避（双机夹击检测+侧翼包抄）
     ActionProtectMannedVision,
     ActionAttackLogic,
     ActionSearchFormation,
@@ -27,14 +30,25 @@ from .actions import (
 
 class BTDemoAgent(AutoAgentBase):
     """
-    基于行为树的战斗AI智能体
+    基于行为树的战斗AI智能体 - V1版本（保守速度策略）
+
+    使用V1躲避机制：根据威胁等级使用不同速度
+    - 正常威胁：80-83%最大速度
+    - 危险威胁：90-92%最大速度
+    - 紧急/致命威胁：100%最大速度
+
+    【新增】智能战术躲避：
+    - 检测是否被两架敌机同时夹击
+    - 如果被夹击，先后撤拉开距离
+    - 然后寻找侧翼有利角度（敌机打不到我，但我能打到敌机）
 
     行为树结构：
     1. 优先检查是否需要开局部署
     2. 进入战斗循环：
        a. 重置帧数据
-       b. 导弹规避（最高优先级）
-       c. 无弹药无人机保护有人机
+       b. 智能战术躲避（双机夹击检测+侧翼包抄）
+       c. 导弹规避（V1保守速度策略）
+       d. 无弹药无人机保护有人机
        e. 攻击逻辑
        f. 搜索阵型
        g. 中心巡逻
@@ -78,13 +92,14 @@ class BTDemoAgent(AutoAgentBase):
 
             # 分支 2: 常规战斗循环 (Main Loop)
             Sequence([
-                ActionResetFrame(),             # 步骤1: 清理
-                ActionEvadeMissilesAdvanced(),  # 步骤2: 导弹规避（高级版，有人机优先保护）
-                ActionProtectMannedVision(),    # 步骤3: 无弹药无人机→保护有人机视野
-                ActionAttackLogic(),            # 步骤5: 开火逻辑
-                ActionSearchFormation(),        # 步骤6: 无敌机→分散搜索推进
-                ActionCenterPatrol(),           # 步骤7: 到达中心无敌机→盘旋
-                ActionPatrolFormation()         # 步骤8: 兜底
+                ActionResetFrame(),                 # 步骤1: 清理
+                ActionTacticalEvasion(),            # 步骤2: 智能战术躲避（双机夹击检测+侧翼包抄）
+                ActionEvadeMissilesAdvanced(),      # 步骤3: 导弹规避（V1保守速度策略）
+                ActionProtectMannedVision(),        # 步骤4: 无弹药无人机→保护有人机视野
+                ActionAttackLogic(),                # 步骤5: 开火逻辑
+                ActionSearchFormation(),            # 步骤6: 无敌机→分散搜索推进
+                ActionCenterPatrol(),               # 步骤7: 到达中心无敌机→盘旋
+                ActionPatrolFormation()             # 步骤8: 兜底
             ])
         ])
 
@@ -208,5 +223,5 @@ class BTDemoAgent(AutoAgentBase):
         """打印战斗数据统计摘要"""
         if hasattr(self, 'kill_data_records') and self.kill_data_records:
             ActionAttackLogic.print_kill_data_summary(self.kill_data_records)
-        # else:
-        #     print("[战斗摘要] 没有收集到导弹数据")
+        else:
+            print("[战斗摘要] 没有收集到导弹数据")
