@@ -99,15 +99,15 @@ class ActionEvadeMissiles(Action):
     MISSILE_THREAT_ANGLE = 75           # 导弹威胁角度（略大于雷达方位范围）
 
     # ========== 规避行为参数 ==========
-    # 规避速度：一律使用最大速度，不分威胁等级
-    # 有人机规避速度 - 全部使用最大速度500m/s
-    MANNED_EVADE_SPEED_NORMAL = 500     # 正常规避速度 (最大速度)
-    MANNED_EVADE_SPEED_DANGER = 500     # 危险规避速度 (最大速度)
+    # 规避速度：根据威胁等级使用不同速度
+    # 有人机规避速度
+    MANNED_EVADE_SPEED_NORMAL = 400     # 正常规避速度 (80%最大速度)
+    MANNED_EVADE_SPEED_DANGER = 450     # 危险规避速度 (90%最大速度)
     MANNED_EVADE_SPEED_CRITICAL = 500   # 紧急规避速度 (最大速度)
 
-    # 无人机规避速度 - 全部使用最大速度360m/s
-    UAV_EVADE_SPEED_NORMAL = 360        # 正常规避速度 (最大速度)
-    UAV_EVADE_SPEED_DANGER = 360        # 危险规避速度 (最大速度)
+    # 无人机规避速度
+    UAV_EVADE_SPEED_NORMAL = 350        # 正常规避速度 (83%最大速度)
+    UAV_EVADE_SPEED_DANGER = 355        # 危险规避速度 (92%最大速度)
     UAV_EVADE_SPEED_CRITICAL = 360      # 紧急规避速度 (最大速度)
 
     # 规避距离：规避目标点距当前位置的距离
@@ -145,7 +145,7 @@ class ActionEvadeMissiles(Action):
     BOUNDARY_MARGIN = 0.09              # 边界安全边距（经纬度，约10km）
 
     # ========== 调试参数 ==========
-    DEBUG_ENABLED = False               # 调试开关
+    DEBUG_ENABLED = True               # 调试开关
     DEBUG_INTERVAL = 20                 # 调试输出间隔帧数
 
     def tick(self, agent) -> str:

@@ -14,8 +14,8 @@ from .basic_actions import (
     ActionExecuteDeployment
 )
 
-# 当前版本（V2）- 最大速度规避
-from .evasion import ActionEvadeMissiles, ActionEvadeMissilesAdvanced
+# 当前版本
+from .evasion import ActionEvadeMissiles, ActionEvadeMissilesAdvanced, ActionTacticalEvasion
 
 from .attack import ActionAttackLogic
 
@@ -31,9 +31,10 @@ __all__ = [
     'ActionResetFrame',
     'ConditionCheckInitialDeployment',
     'ActionExecuteDeployment',
-    # 规避 
+    # 规避
     'ActionEvadeMissiles',
     'ActionEvadeMissilesAdvanced',
+    'ActionTacticalEvasion',  # 新增：智能战术躲避（双机夹击检测+侧翼包抄）
     # 攻击
     'ActionAttackLogic',
     # 阵型

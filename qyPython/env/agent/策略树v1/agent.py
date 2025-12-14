@@ -18,6 +18,7 @@ from .actions import (
     ActionExecuteDeployment,
     ActionEvadeMissilesAdvanced,
     ActionProtectMannedVision,
+    ActionMannedRetreat,
     ActionAttackLogic,
     ActionSearchFormation,
     ActionCenterPatrol,
@@ -35,6 +36,7 @@ class BTDemoAgent(AutoAgentBase):
        a. 重置帧数据
        b. 导弹规避（最高优先级）
        c. 无弹药无人机保护有人机
+       d. 有人机后撤
        e. 攻击逻辑
        f. 搜索阵型
        g. 中心巡逻
@@ -44,13 +46,13 @@ class BTDemoAgent(AutoAgentBase):
     def __init__(self, side, name):
         super().__init__(side, name)
 
-        # # === 调试：打印战场信息 ===
-        # print(f"[BTDemoAgent] 初始化 side={side}, name={name}")
-        # print(f"[BTDemoAgent] 战场边界: {self.battlefield}")
-        # if self.battlefield.get('min_lon') is not None:
-        #     calc_center_lat = (self.battlefield['min_lat'] + self.battlefield['max_lat']) / 2
-        #     calc_center_lon = (self.battlefield['min_lon'] + self.battlefield['max_lon']) / 2
-        #     print(f"[BTDemoAgent] 计算中心点: lat={calc_center_lat}, lon={calc_center_lon}")
+        # === 调试：打印战场信息 ===
+        print(f"[BTDemoAgent] 初始化 side={side}, name={name}")
+        print(f"[BTDemoAgent] 战场边界: {self.battlefield}")
+        if self.battlefield.get('min_lon') is not None:
+            calc_center_lat = (self.battlefield['min_lat'] + self.battlefield['max_lat']) / 2
+            calc_center_lon = (self.battlefield['min_lon'] + self.battlefield['max_lon']) / 2
+            print(f"[BTDemoAgent] 计算中心点: lat={calc_center_lat}, lon={calc_center_lon}")
 
         # --- 状态变量 ---
         self.initial_deployment_complete = False
@@ -81,6 +83,7 @@ class BTDemoAgent(AutoAgentBase):
                 ActionResetFrame(),             # 步骤1: 清理
                 ActionEvadeMissilesAdvanced(),  # 步骤2: 导弹规避（高级版，有人机优先保护）
                 ActionProtectMannedVision(),    # 步骤3: 无弹药无人机→保护有人机视野
+                ActionMannedRetreat(),          # 步骤4: 发现敌机→有人机后撤
                 ActionAttackLogic(),            # 步骤5: 开火逻辑
                 ActionSearchFormation(),        # 步骤6: 无敌机→分散搜索推进
                 ActionCenterPatrol(),           # 步骤7: 到达中心无敌机→盘旋
@@ -208,5 +211,5 @@ class BTDemoAgent(AutoAgentBase):
         """打印战斗数据统计摘要"""
         if hasattr(self, 'kill_data_records') and self.kill_data_records:
             ActionAttackLogic.print_kill_data_summary(self.kill_data_records)
-        # else:
-        #     print("[战斗摘要] 没有收集到导弹数据")
+        else:
+            print("[战斗摘要] 没有收集到导弹数据")

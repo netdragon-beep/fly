@@ -2,10 +2,6 @@
 动作节点模块
 
 包含所有行为树的叶子节点（Action和Condition）
-
-版本说明：
-- V1（保守速度策略）：根据威胁等级使用不同速度（80%-100%）
-- V2（当前版本）：所有威胁等级统一使用最大速度
 """
 
 from .basic_actions import (
@@ -14,13 +10,13 @@ from .basic_actions import (
     ActionExecuteDeployment
 )
 
-# 当前版本（V2）- 最大速度规避
 from .evasion import ActionEvadeMissiles, ActionEvadeMissilesAdvanced
 
 from .attack import ActionAttackLogic
 
 from .formation import (
     ActionSearchFormation,
+    ActionMannedRetreat,
     ActionProtectMannedVision,
     ActionCenterPatrol,
     ActionPatrolFormation
@@ -31,7 +27,7 @@ __all__ = [
     'ActionResetFrame',
     'ConditionCheckInitialDeployment',
     'ActionExecuteDeployment',
-    # 规避 
+    # 规避
     'ActionEvadeMissiles',
     'ActionEvadeMissilesAdvanced',
     # 攻击

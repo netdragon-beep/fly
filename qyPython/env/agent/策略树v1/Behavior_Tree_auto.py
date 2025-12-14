@@ -42,6 +42,7 @@ from .actions import (
     ActionEvadeMissiles,
     ActionAttackLogic,
     ActionSearchFormation,
+    ActionMannedRetreat,
     ActionProtectMannedVision,
     ActionCenterPatrol,
     ActionPatrolFormation

@@ -107,8 +107,8 @@ class ActionSearchFormation(Action):
     # 搜索阵型配置
     UAV_SPACING_KM = 18             # 无人机横向间距 km（覆盖雷达盲区）
     MANNED_BEHIND_KM = 15           # 有人机在无人机后方距离 km
-    ADVANCE_SPEED_UAV = 400         # 无人机推进速度 m/s（中速推进，留有机动余量）
-    ADVANCE_SPEED_MANNED = 320      # 有人机推进速度 m/s（略慢于无人机）
+    ADVANCE_SPEED_UAV = 300         # 无人机推进速度 m/s（中速推进，留有机动余量）
+    ADVANCE_SPEED_MANNED = 280      # 有人机推进速度 m/s（略慢于无人机）
 
     # 搜索终止条件：经过中心区域后继续搜索的距离
     PASS_CENTER_KM = 30             # 经过中心30km后停止搜索
@@ -187,6 +187,105 @@ class ActionSearchFormation(Action):
                 )
 
         return NodeStatus.SUCCESS
+
+
+class ActionMannedRetreat(Action):
+    """
+    有人机后撤保护
+
+    核心原则：有人机被击毁直接判负，必须最大程度保护
+
+    战术设计：
+    1. 发现敌机时，有人机立即后撤到安全距离
+    2. 后撤位置基于导弹最大射程计算（72km外为绝对安全）
+    3. 有人机在后方盘旋，保持雷达覆盖前方战场
+    4. 利用60km雷达优势，在安全距离外提供态势感知
+
+    安全距离计算：
+    - 导弹最大射程72km
+    - 考虑敌机前进，设置安全距离为40-50km
+    - 有人机在我方半场活动，远离前线
+    """
+
+    # 后撤参数（基于导弹参数）
+    RETREAT_DISTANCE_KM = 8         # 后撤到中心后方距离 km
+    SAFE_DISTANCE_KM = 10           # 与最近敌机的安全距离 km
+
+    # 盘旋参数
+    PATROL_RADIUS_KM = 3            # 盘旋半径 km（在中心区域5km内活动可积累时间）
+    PATROL_SPEED = 250              # 盘旋速度 m/s（节省燃油，保持机动性）
+    PATROL_ALTITUDE = 5000          # 盘旋高度 m（较高便于雷达覆盖）
+
+    # 紧急逃跑参数
+    EMERGENCY_DISTANCE_KM = 10      # 紧急逃跑触发距离 km
+    ESCAPE_SPEED = 500              # 逃跑速度 m/s（有人机最大速度）
+
+    def tick(self, agent) -> str:
+        # 只有发现敌机时才执行后撤
+        if not agent.enemy_units:
+            return NodeStatus.SUCCESS
+
+        manned = [u for u in agent.own_units if u.get('type') == '有人机'
+                  and u['name'] not in agent.commanded_units]
+
+        if not manned:
+            return NodeStatus.SUCCESS
+
+        center_lat = agent.center_lat
+        center_lon = agent.center_lon
+        enemy_dir = 1 if agent.side == 'red' else -1
+
+        # 计算最近敌机距离
+        min_enemy_dist = float('inf')
+        for m in manned:
+            m_lon = m.get('longitude', 0)
+            m_lat = m.get('latitude', 0)
+            for enemy in agent.enemy_units:
+                e_lon = enemy.get('longitude', enemy.get('X', 0))
+                e_lat = enemy.get('latitude', enemy.get('Y', 0))
+                dist = YxGeoUtils.haversine_distance(m_lon, m_lat, e_lon, e_lat)
+                min_enemy_dist = min(min_enemy_dist, dist)
+
+        min_enemy_dist_km = min_enemy_dist / 1000
+
+        # 判断是否需要紧急逃跑
+        is_emergency = min_enemy_dist_km < self.EMERGENCY_DISTANCE_KM
+
+        # 计算后撤位置
+        retreat_lon = center_lon - OfficialParams.km_to_deg(self.RETREAT_DISTANCE_KM) * enemy_dir
+
+        # 盘旋角度控制
+        if not hasattr(agent, 'manned_retreat_angle'):
+            agent.manned_retreat_angle = 0
+        agent.manned_retreat_angle = (agent.manned_retreat_angle + 5) % 360
+
+        for i, unit in enumerate(manned):
+            if is_emergency:
+                # 紧急逃跑：直接向后方逃离
+                escape_lon = center_lon - OfficialParams.km_to_deg(self.RETREAT_DISTANCE_KM + 20) * enemy_dir
+                target_pt = (center_lat, escape_lon, self.PATROL_ALTITUDE)
+                agent.add_action(
+                    decCmd.fly_to_point(unit['name'], target_pt, self.ESCAPE_SPEED),
+                    unit['name']
+                )
+            else:
+                # 正常后撤盘旋（尽量在中心区域附近积累时间）
+                angle = (agent.manned_retreat_angle + i * 180) % 360
+                angle_rad = math.radians(angle)
+
+                # 在后撤位置小范围盘旋
+                patrol_radius_deg = OfficialParams.km_to_deg(self.PATROL_RADIUS_KM)
+                target_lat = center_lat + patrol_radius_deg * math.cos(angle_rad)
+                target_lon = retreat_lon + patrol_radius_deg * math.sin(angle_rad)
+
+                target_pt = (target_lat, target_lon, self.PATROL_ALTITUDE)
+                agent.add_action(
+                    decCmd.fly_to_point(unit['name'], target_pt, self.PATROL_SPEED),
+                    unit['name']
+                )
+
+        return NodeStatus.SUCCESS
+
 
 class ActionProtectMannedVision(Action):
     """
@@ -271,7 +370,7 @@ class ActionProtectMannedVision(Action):
                 unit_offset = 180  # 单个无人机直接在后方
 
             # 转换为绝对角度
-            abs_angle = (enemy_angle + unit_offset + agent.protect_angle * 0.2) % 360
+            abs_angle = (enemy_angle + unit_offset + self.protect_angle * 0.2) % 360
             angle_rad = math.radians(abs_angle)
 
             # 计算保护位置
@@ -357,9 +456,9 @@ class ActionCenterPatrol(Action):
 
         # === 进入中心控制模式 ===
         # 调试输出
-        # if not hasattr(agent, '_center_patrol_logged'):
-        #     agent._center_patrol_logged = True
-        #     print(f"[CenterPatrol] 进入中心控制模式，中心点: ({real_center_lat:.4f}, {real_center_lon:.4f})")
+        if not hasattr(agent, '_center_patrol_logged'):
+            agent._center_patrol_logged = True
+            print(f"[CenterPatrol] 进入中心控制模式，中心点: ({real_center_lat:.4f}, {real_center_lon:.4f})")
 
         # 盘旋角度控制
         if not hasattr(agent, 'center_patrol_angle'):

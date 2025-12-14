@@ -29,30 +29,23 @@ class ConditionCheckInitialDeployment(Condition):
 
 
 class ActionExecuteDeployment(Action):
-    """
-    执行开局部署
-    """
-
-    # 官方参数
-    MANNED_MAX_SPEED = 500   # 有人机最大速度 m/s
-    UAV_MAX_SPEED = 360      # 无人机最大速度 m/s
-
+    """执行开局部署"""
     def tick(self, agent) -> str:
         # 分离有人机和无人机
         manned = [u for u in agent.own_units if u.get('type') == '有人机']
         uavs = [u for u in agent.own_units if u.get('type') == '无人机']
 
-        # 无人机靠前，速度拉满360m/s
+        # 无人机靠前
         for unit in uavs:
             offset_lon = 0.45 if agent.side == 'red' else -0.45
-            target = (unit['latitude'], unit['longitude'] + offset_lon, 4000)
-            agent.add_action(decCmd.fly_to_point(unit['name'], target, self.UAV_MAX_SPEED), unit['name'])
+            target = (unit['latitude'], unit['longitude'] + offset_lon, 3500)
+            agent.add_action(decCmd.fly_to_point(unit['name'], target, 400), unit['name'])
 
-        # 有人机靠后，速度拉满500m/s
+        # 有人机靠后
         for unit in manned:
             offset_lon = 0.27 if agent.side == 'red' else -0.27
             target = (unit['latitude'], unit['longitude'] + offset_lon, 4000)
-            agent.add_action(decCmd.fly_to_point(unit['name'], target, self.MANNED_MAX_SPEED), unit['name'])
+            agent.add_action(decCmd.fly_to_point(unit['name'], target, 300), unit['name'])
 
         agent.initial_deployment_complete = True
         return NodeStatus.SUCCESS

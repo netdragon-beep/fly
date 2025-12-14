@@ -22,13 +22,12 @@ class ActionAttackLogic(Action):
     """
 
     # 调试开关
-    DEBUG_ENABLED = False  # 开启调试便于观察协同开火
+    DEBUG_ENABLED = True  # 开启调试便于观察协同开火
     DEBUG_INTERVAL = 10  # 每N帧输出一次火控信息
 
-    # 协同开火参数（基于官方导弹参数：速度1200m/s，最大飞行时间60s）
-    # 有效射程35km，导弹飞行约30秒到达
-    MISSILE_FLIGHT_TIME_ESTIMATE = 350  # 估计导弹飞行时间（帧），约35秒@10fps（考虑最远有效射程）
-    MIN_REFIRE_INTERVAL = 100           # 最小再次发射间隔（帧），约10秒
+    # 协同开火参数
+    MISSILE_FLIGHT_TIME_ESTIMATE = 80  # 估计导弹飞行时间（帧），约8秒@10fps
+    MIN_REFIRE_INTERVAL = 50           # 最小再次发射间隔（帧），约5秒
     MAX_PENDING_MISSILES_PER_TARGET = 2  # 每个目标最多同时有2枚导弹（双机各1发）
 
     # 双机协同开火配置
@@ -37,7 +36,7 @@ class ActionAttackLogic(Action):
     MIN_ANGLE_DIFFERENCE = 30          # 最小攻击角度差（度），确保从不同方向攻击
 
     # 数据收集开关（用于拟合致死区间模型）
-    COLLECT_KILL_DATA = False
+    COLLECT_KILL_DATA = True
 
     def tick(self, agent) -> str:
         if not agent.enemy_units:
@@ -70,9 +69,9 @@ class ActionAttackLogic(Action):
                 record['result'] = 'timeout'
                 record['flight_frames'] = agent.frame_count - record['launch_frame']
                 agent.kill_data_records.append(record)
-                # print(f"[数据收集] 脱靶: dist={record['distance']:.0f}m, "
-                #       f"aspect={record['aspect_angle']:.1f}°, "
-                #       f"closure={record['closure_rate']:.1f}m/s, Pk={record['pk']:.2f}")
+                print(f"[数据收集] 脱靶: dist={record['distance']:.0f}m, "
+                      f"aspect={record['aspect_angle']:.1f}°, "
+                      f"closure={record['closure_rate']:.1f}m/s, Pk={record['pk']:.2f}")
 
         # === 检查己方导弹状态（如果有的话）===
         # 通过检测目标是否还存在来判断导弹是否命中
@@ -107,10 +106,10 @@ class ActionAttackLogic(Action):
                     record['est_flight_distance'] = flight_time_sec * missile_speed
                     record['est_intercept_distance'] = record['distance'] - flight_time_sec * combined_speed
                     agent.kill_data_records.append(record)
-                    # print(f"[数据收集] 击杀! dist={record['distance']:.0f}m, "
-                    #       f"aspect={record['aspect_angle']:.1f}°, "
-                    #       f"closure={record['closure_rate']:.1f}m/s, Pk={record['pk']:.2f}, "
-                    #       f"飞行={elapsed}帧, 估算拦截距离={record['est_intercept_distance']:.0f}m")
+                    print(f"[数据收集] 击杀! dist={record['distance']:.0f}m, "
+                          f"aspect={record['aspect_angle']:.1f}°, "
+                          f"closure={record['closure_rate']:.1f}m/s, Pk={record['pk']:.2f}, "
+                          f"飞行={elapsed}帧, 估算拦截距离={record['est_intercept_distance']:.0f}m")
 
         for key in keys_to_remove:
             del agent.pending_missiles[key]
@@ -320,21 +319,21 @@ class ActionAttackLogic(Action):
                         agent.pending_missiles[pending_key1] = agent.frame_count
                         agent.pending_missiles[pending_key2] = agent.frame_count
 
-                        # # 详细输出协同开火信息
-                        # print(f"\n{'*'*60}")
-                        # print(f"[双机协同开火!!! - V2物理NEZ]")
-                        # print(f"  射手1: {unit1['name']}")
-                        # print(f"    距离: {best_nez_info['dist1']/1000:.2f}km, NEZ: {best_nez_info['nez1']/1000:.2f}km")
-                        # print(f"    Pk: {best_nez_info['pk1']:.2f}, 径向速度: {best_nez_info['v_radial_1']:.1f}m/s, 横向速度: {best_nez_info['v_lateral_1']:.1f}m/s")
-                        # print(f"  射手2: {unit2['name']}")
-                        # print(f"    距离: {best_nez_info['dist2']/1000:.2f}km, NEZ: {best_nez_info['nez2']/1000:.2f}km")
-                        # print(f"    Pk: {best_nez_info['pk2']:.2f}, 径向速度: {best_nez_info['v_radial_2']:.1f}m/s, 横向速度: {best_nez_info['v_lateral_2']:.1f}m/s")
-                        # print(f"  目标: {target_name}")
-                        # print(f"  综合Pk: {best_combined_pk:.2f}")
-                        # print(f"  逃逸难度: {best_nez_info['escape_difficulty']:.2f}")
-                        # print(f"  协同NEZ: {best_nez_info['combined_nez']/1000:.2f}km")
-                        # print(f"  开火原因: {best_fire_reason}")
-                        # print(f"{'*'*60}")
+                        # 详细输出协同开火信息
+                        print(f"\n{'*'*60}")
+                        print(f"[双机协同开火!!! - V2物理NEZ]")
+                        print(f"  射手1: {unit1['name']}")
+                        print(f"    距离: {best_nez_info['dist1']/1000:.2f}km, NEZ: {best_nez_info['nez1']/1000:.2f}km")
+                        print(f"    Pk: {best_nez_info['pk1']:.2f}, 径向速度: {best_nez_info['v_radial_1']:.1f}m/s, 横向速度: {best_nez_info['v_lateral_1']:.1f}m/s")
+                        print(f"  射手2: {unit2['name']}")
+                        print(f"    距离: {best_nez_info['dist2']/1000:.2f}km, NEZ: {best_nez_info['nez2']/1000:.2f}km")
+                        print(f"    Pk: {best_nez_info['pk2']:.2f}, 径向速度: {best_nez_info['v_radial_2']:.1f}m/s, 横向速度: {best_nez_info['v_lateral_2']:.1f}m/s")
+                        print(f"  目标: {target_name}")
+                        print(f"  综合Pk: {best_combined_pk:.2f}")
+                        print(f"  逃逸难度: {best_nez_info['escape_difficulty']:.2f}")
+                        print(f"  协同NEZ: {best_nez_info['combined_nez']/1000:.2f}km")
+                        print(f"  开火原因: {best_fire_reason}")
+                        print(f"{'*'*60}")
 
                         # 收集发射数据（为两架飞机分别记录）
                         self._record_launch_data(agent, unit1, enemy, cand1, pending_key1)
@@ -347,13 +346,13 @@ class ActionAttackLogic(Action):
                             fired_units.add(unit1['name'])
                             pending_key1 = (unit1['name'], target_id)
                             agent.pending_missiles[pending_key1] = agent.frame_count
-                            # print(f"[警告] 协同开火失败，只有 {unit1['name']} 成功发射")
+                            print(f"[警告] 协同开火失败，只有 {unit1['name']} 成功发射")
                         if fire_success_2:
                             agent.add_action(decCmd.fire_track(unit2['name'], target_name), None)
                             fired_units.add(unit2['name'])
                             pending_key2 = (unit2['name'], target_id)
                             agent.pending_missiles[pending_key2] = agent.frame_count
-                            # print(f"[警告] 协同开火失败，只有 {unit2['name']} 成功发射")
+                            print(f"[警告] 协同开火失败，只有 {unit2['name']} 成功发射")
 
                 elif best_pair:
                     if self.DEBUG_ENABLED and should_debug:
@@ -501,7 +500,7 @@ class ActionAttackLogic(Action):
         print(f"[数据收集] 总共 {len(existing_data)} 条记录")
 
         # 打印统计
-        # cls.print_kill_data_summary(agent.kill_data_records)
+        cls.print_kill_data_summary(agent.kill_data_records)
 
     @classmethod
     def print_kill_data_summary(cls, records):
@@ -607,8 +606,8 @@ class ActionAttackLogic(Action):
         is_manned = unit.get('type') == '有人机'
         nez = SmartFireControl.calculate_nez(is_manned, aspect)
 
-        # 估算导弹飞行距离（基于官方参数：导弹速度1200m/s）
-        missile_speed = 1200  # 官方导弹速度，有人机和无人机相同
+        # 估算导弹飞行距离
+        missile_speed = 900 if is_manned else 800
 
         agent.missile_launch_data[pending_key] = {
             'launch_frame': agent.frame_count,
