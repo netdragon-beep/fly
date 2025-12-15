@@ -117,6 +117,9 @@ class ActionSearchFormation(Action):
     UAV_SEARCH_ALT = 3500           # 无人机搜索高度 m
     MANNED_SEARCH_ALT = 4500        # 有人机搜索高度 m（略高，便于俯视）
 
+    # 边界安全边距（经纬度，约10km）
+    BOUNDARY_MARGIN = 0.09
+
     def tick(self, agent) -> str:
         # 如果已发现敌机，不执行搜索阵型（交给攻击逻辑）
         if agent.enemy_units:
@@ -132,6 +135,7 @@ class ActionSearchFormation(Action):
 
         center_lat = agent.center_lat
         center_lon = agent.center_lon
+        battlefield = agent.battlefield
 
         # 确定敌方方向（红方向东攻击，蓝方向西攻击）
         enemy_dir = 1 if agent.side == 'red' else -1
@@ -154,6 +158,14 @@ class ActionSearchFormation(Action):
         # 有人机后置支援线
         manned_line_lon = uav_line_lon - OfficialParams.km_to_deg(self.MANNED_BEHIND_KM) * enemy_dir
 
+        # === 边界检查：确保搜索线不超出边界 ===
+        if battlefield.get('min_lon') is not None:
+            margin = self.BOUNDARY_MARGIN
+            uav_line_lon = max(battlefield['min_lon'] + margin,
+                              min(battlefield['max_lon'] - margin, uav_line_lon))
+            manned_line_lon = max(battlefield['min_lon'] + margin,
+                                  min(battlefield['max_lon'] - margin, manned_line_lon))
+
         # === 部署无人机搜索线 ===
         if uavs:
             num_uavs = len(uavs)
@@ -168,6 +180,15 @@ class ActionSearchFormation(Action):
             for i, uav in enumerate(uavs_sorted):
                 target_lat = start_lat + i * OfficialParams.km_to_deg(self.UAV_SPACING_KM)
                 target_lon = uav_line_lon
+
+                # 边界约束
+                if battlefield.get('min_lon') is not None:
+                    margin = self.BOUNDARY_MARGIN
+                    target_lon = max(battlefield['min_lon'] + margin,
+                                    min(battlefield['max_lon'] - margin, target_lon))
+                    target_lat = max(battlefield['min_lat'] + margin,
+                                    min(battlefield['max_lat'] - margin, target_lat))
+
                 target_pt = (target_lat, target_lon, self.UAV_SEARCH_ALT)
                 agent.add_action(
                     decCmd.fly_to_point(uav['name'], target_pt, self.ADVANCE_SPEED_UAV),
@@ -180,6 +201,15 @@ class ActionSearchFormation(Action):
                 # 有人机在编队中央后方
                 target_lat = center_lat
                 target_lon = manned_line_lon
+
+                # 边界约束
+                if battlefield.get('min_lon') is not None:
+                    margin = self.BOUNDARY_MARGIN
+                    target_lon = max(battlefield['min_lon'] + margin,
+                                    min(battlefield['max_lon'] - margin, target_lon))
+                    target_lat = max(battlefield['min_lat'] + margin,
+                                    min(battlefield['max_lat'] - margin, target_lat))
+
                 target_pt = (target_lat, target_lon, self.MANNED_SEARCH_ALT)
                 agent.add_action(
                     decCmd.fly_to_point(unit['name'], target_pt, self.ADVANCE_SPEED_MANNED),
@@ -322,6 +352,9 @@ class ActionCenterPatrol(Action):
     # 触发条件
     PASS_CENTER_KM = 30             # 经过中心30km后开始盘旋
 
+    # 边界安全边距（经纬度，约10km）
+    BOUNDARY_MARGIN = 0.09
+
     def tick(self, agent) -> str:
         # 如果有敌机，不执行盘旋（优先攻击/防御）
         if agent.enemy_units:
@@ -335,7 +368,7 @@ class ActionCenterPatrol(Action):
         if not manned and not uavs:
             return NodeStatus.SUCCESS
 
-        # 获取真实战场中心点
+        # 获取战场边界
         battlefield = agent.battlefield
         if battlefield.get('min_lon') is not None:
             real_center_lon = (battlefield['min_lon'] + battlefield['max_lon']) / 2
@@ -347,6 +380,7 @@ class ActionCenterPatrol(Action):
         # 检查是否已经过中心区域足够远
         all_units = manned + uavs
         avg_lon = sum(u.get('longitude', 0) for u in all_units) / len(all_units)
+        avg_lat = sum(u.get('latitude', 0) for u in all_units) / len(all_units)
         enemy_dir = 1 if agent.side == 'red' else -1
 
         passed_center_deg = (avg_lon - real_center_lon) * enemy_dir
@@ -356,17 +390,35 @@ class ActionCenterPatrol(Action):
             return NodeStatus.SUCCESS  # 还没搜索完毕
 
         # === 进入中心控制模式 ===
-        # 调试输出
-        # if not hasattr(agent, '_center_patrol_logged'):
-        #     agent._center_patrol_logged = True
-        #     print(f"[CenterPatrol] 进入中心控制模式，中心点: ({real_center_lat:.4f}, {real_center_lon:.4f})")
-
         # 盘旋角度控制
         if not hasattr(agent, 'center_patrol_angle'):
             agent.center_patrol_angle = 0
         agent.center_patrol_angle = (agent.center_patrol_angle + 3) % 360
 
-        # === 有人机内环巡逻（在中心5km区域内） ===
+        # === 计算盘旋中心点 ===
+        # 关键修改：不强制返回地图中心，而是在当前位置附近就地盘旋
+        # 检查当前位置是否离边界太近，如果是则向中心方向调整盘旋中心
+        patrol_center_lon = avg_lon
+        patrol_center_lat = avg_lat
+
+        if battlefield.get('min_lon') is not None:
+            margin = self.BOUNDARY_MARGIN
+            # 检查并调整盘旋中心，确保盘旋范围不会超出边界
+            max_patrol_radius = OfficialParams.km_to_deg(self.UAV_PATROL_RADIUS_KM)
+
+            # 经度边界检查
+            if patrol_center_lon - max_patrol_radius < battlefield['min_lon'] + margin:
+                patrol_center_lon = battlefield['min_lon'] + margin + max_patrol_radius
+            elif patrol_center_lon + max_patrol_radius > battlefield['max_lon'] - margin:
+                patrol_center_lon = battlefield['max_lon'] - margin - max_patrol_radius
+
+            # 纬度边界检查
+            if patrol_center_lat - max_patrol_radius < battlefield['min_lat'] + margin:
+                patrol_center_lat = battlefield['min_lat'] + margin + max_patrol_radius
+            elif patrol_center_lat + max_patrol_radius > battlefield['max_lat'] - margin:
+                patrol_center_lat = battlefield['max_lat'] - margin - max_patrol_radius
+
+        # === 有人机内环巡逻 ===
         if manned:
             inner_radius_deg = OfficialParams.km_to_deg(self.MANNED_PATROL_RADIUS_KM)
 
@@ -374,8 +426,14 @@ class ActionCenterPatrol(Action):
                 angle = (agent.center_patrol_angle + i * (360 / len(manned))) % 360
                 angle_rad = math.radians(angle)
 
-                target_lat = real_center_lat + inner_radius_deg * math.sin(angle_rad)
-                target_lon = real_center_lon + inner_radius_deg * math.cos(angle_rad)
+                target_lat = patrol_center_lat + inner_radius_deg * math.sin(angle_rad)
+                target_lon = patrol_center_lon + inner_radius_deg * math.cos(angle_rad)
+
+                # 边界约束
+                target_lon, target_lat = self._clamp_to_boundary(
+                    target_lon, target_lat, battlefield
+                )
+
                 target_pt = (target_lat, target_lon, self.MANNED_PATROL_ALT)
 
                 agent.add_action(
@@ -391,8 +449,14 @@ class ActionCenterPatrol(Action):
                 angle = (agent.center_patrol_angle + i * (360 / len(uavs))) % 360
                 angle_rad = math.radians(angle)
 
-                target_lat = real_center_lat + outer_radius_deg * math.sin(angle_rad)
-                target_lon = real_center_lon + outer_radius_deg * math.cos(angle_rad)
+                target_lat = patrol_center_lat + outer_radius_deg * math.sin(angle_rad)
+                target_lon = patrol_center_lon + outer_radius_deg * math.cos(angle_rad)
+
+                # 边界约束
+                target_lon, target_lat = self._clamp_to_boundary(
+                    target_lon, target_lat, battlefield
+                )
+
                 target_pt = (target_lat, target_lon, self.UAV_PATROL_ALT)
 
                 agent.add_action(
@@ -401,6 +465,14 @@ class ActionCenterPatrol(Action):
                 )
 
         return NodeStatus.SUCCESS
+
+    def _clamp_to_boundary(self, lon, lat, battlefield):
+        """将坐标限制在战场边界内"""
+        if battlefield.get('min_lon') is not None:
+            margin = self.BOUNDARY_MARGIN
+            lon = max(battlefield['min_lon'] + margin, min(battlefield['max_lon'] - margin, lon))
+            lat = max(battlefield['min_lat'] + margin, min(battlefield['max_lat'] - margin, lat))
+        return lon, lat
 
 
 class ActionPatrolFormation(Action):
@@ -426,6 +498,9 @@ class ActionPatrolFormation(Action):
     MANNED_ALT = 4500               # 有人机高度 m
     UAV_ALT = 3500                  # 无人机高度 m
 
+    # 边界安全边距（经纬度，约10km）
+    BOUNDARY_MARGIN = 0.09
+
     def tick(self, agent) -> str:
         # 仅控制剩下的单位
         available_units = [u for u in agent.own_units if u['name'] not in agent.commanded_units]
@@ -435,8 +510,29 @@ class ActionPatrolFormation(Action):
         manned = [u for u in available_units if u.get('type') == '有人机']
         uavs = [u for u in available_units if u.get('type') == '无人机']
 
-        center_lat = agent.center_lat
-        center_lon = agent.center_lon
+        battlefield = agent.battlefield
+
+        # 计算当前单位的平均位置作为巡逻中心（就地盘旋）
+        all_units = manned + uavs
+        patrol_center_lat = sum(u.get('latitude', 0) for u in all_units) / len(all_units)
+        patrol_center_lon = sum(u.get('longitude', 0) for u in all_units) / len(all_units)
+
+        # 边界检查：确保巡逻中心不会导致巡逻范围超出边界
+        if battlefield.get('min_lon') is not None:
+            margin = self.BOUNDARY_MARGIN
+            max_radius = OfficialParams.km_to_deg(self.UAV_RADIUS_KM)
+
+            # 经度边界检查
+            if patrol_center_lon - max_radius < battlefield['min_lon'] + margin:
+                patrol_center_lon = battlefield['min_lon'] + margin + max_radius
+            elif patrol_center_lon + max_radius > battlefield['max_lon'] - margin:
+                patrol_center_lon = battlefield['max_lon'] - margin - max_radius
+
+            # 纬度边界检查
+            if patrol_center_lat - max_radius < battlefield['min_lat'] + margin:
+                patrol_center_lat = battlefield['min_lat'] + margin + max_radius
+            elif patrol_center_lat + max_radius > battlefield['max_lat'] - margin:
+                patrol_center_lat = battlefield['max_lat'] - margin - max_radius
 
         # 动态旋转角度
         if not hasattr(agent, 'defense_angle_offset'):
@@ -450,8 +546,17 @@ class ActionPatrolFormation(Action):
                 angle = (agent.defense_angle_offset + i * (360 / len(manned))) % 360
                 angle_rad = math.radians(angle)
 
-                target_lat = center_lat + inner_radius_deg * math.sin(angle_rad)
-                target_lon = center_lon + inner_radius_deg * math.cos(angle_rad)
+                target_lat = patrol_center_lat + inner_radius_deg * math.sin(angle_rad)
+                target_lon = patrol_center_lon + inner_radius_deg * math.cos(angle_rad)
+
+                # 边界约束
+                if battlefield.get('min_lon') is not None:
+                    margin = self.BOUNDARY_MARGIN
+                    target_lon = max(battlefield['min_lon'] + margin,
+                                    min(battlefield['max_lon'] - margin, target_lon))
+                    target_lat = max(battlefield['min_lat'] + margin,
+                                    min(battlefield['max_lat'] - margin, target_lat))
+
                 target_pt = (target_lat, target_lon, self.MANNED_ALT)
 
                 agent.add_action(
@@ -466,8 +571,17 @@ class ActionPatrolFormation(Action):
                 angle = (agent.defense_angle_offset + i * (360 / len(uavs))) % 360
                 angle_rad = math.radians(angle)
 
-                target_lat = center_lat + outer_radius_deg * math.sin(angle_rad)
-                target_lon = center_lon + outer_radius_deg * math.cos(angle_rad)
+                target_lat = patrol_center_lat + outer_radius_deg * math.sin(angle_rad)
+                target_lon = patrol_center_lon + outer_radius_deg * math.cos(angle_rad)
+
+                # 边界约束
+                if battlefield.get('min_lon') is not None:
+                    margin = self.BOUNDARY_MARGIN
+                    target_lon = max(battlefield['min_lon'] + margin,
+                                    min(battlefield['max_lon'] - margin, target_lon))
+                    target_lat = max(battlefield['min_lat'] + margin,
+                                    min(battlefield['max_lat'] - margin, target_lat))
+
                 target_pt = (target_lat, target_lon, self.UAV_ALT)
 
                 agent.add_action(

@@ -26,6 +26,12 @@ from .formation import (
     ActionPatrolFormation
 )
 
+from .orbit_combat import (
+    ActionOrbitCombat,
+    ActionAggressiveOrbitCombat,
+    ActionDefensiveOrbitCombat
+)
+
 __all__ = [
     # 基础动作
     'ActionResetFrame',
@@ -43,4 +49,8 @@ __all__ = [
     'ActionProtectMannedVision',
     'ActionCenterPatrol',
     'ActionPatrolFormation',
+    # 盘旋作战
+    'ActionOrbitCombat',
+    'ActionAggressiveOrbitCombat',
+    'ActionDefensiveOrbitCombat',
 ]

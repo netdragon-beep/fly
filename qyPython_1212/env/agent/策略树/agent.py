@@ -24,7 +24,8 @@ from .actions import (
     ActionAttackLogic,
     ActionSearchFormation,
     ActionCenterPatrol,
-    ActionPatrolFormation
+    ActionPatrolFormation,
+    ActionOrbitCombat,            # 新增：空中盘旋作战
 )
 
 
@@ -42,6 +43,11 @@ class BTDemoAgent(AutoAgentBase):
     - 如果被夹击，先后撤拉开距离
     - 然后寻找侧翼有利角度（敌机打不到我，但我能打到敌机）
 
+    【新增】空中盘旋作战：
+    - 发现敌机时采用盘旋战术围绕敌机作战
+    - 有人机在外围安全距离盘旋，保持雷达锁定
+    - 无人机在内圈攻击距离盘旋，准备发起攻击
+
     行为树结构：
     1. 优先检查是否需要开局部署
     2. 进入战斗循环：
@@ -50,9 +56,10 @@ class BTDemoAgent(AutoAgentBase):
        c. 导弹规避（V1保守速度策略）
        d. 无弹药无人机保护有人机
        e. 攻击逻辑
-       f. 搜索阵型
-       g. 中心巡逻
-       h. 防御巡逻
+       f. 空中盘旋作战（有敌机时围绕敌机盘旋）
+       g. 搜索阵型
+       h. 中心巡逻
+       i. 防御巡逻
     """
 
     def __init__(self, side, name):
@@ -97,9 +104,10 @@ class BTDemoAgent(AutoAgentBase):
                 ActionEvadeMissilesAdvanced(),      # 步骤3: 导弹规避（V1保守速度策略）
                 ActionProtectMannedVision(),        # 步骤4: 无弹药无人机→保护有人机视野
                 ActionAttackLogic(),                # 步骤5: 开火逻辑
-                ActionSearchFormation(),            # 步骤6: 无敌机→分散搜索推进
-                ActionCenterPatrol(),               # 步骤7: 到达中心无敌机→盘旋
-                ActionPatrolFormation()             # 步骤8: 兜底
+                ActionOrbitCombat(),                # 步骤6: 空中盘旋作战（有敌机时围绕敌机盘旋）
+                ActionSearchFormation(),            # 步骤7: 无敌机→分散搜索推进
+                ActionCenterPatrol(),               # 步骤8: 到达中心无敌机→盘旋
+                ActionPatrolFormation()             # 步骤9: 兜底
             ])
         ])
 

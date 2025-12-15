@@ -39,6 +39,9 @@ class ActionAttackLogic(Action):
     # 数据收集开关（用于拟合致死区间模型）
     COLLECT_KILL_DATA = True
 
+    # 机动控制开关（设为False时由其他Action如ActionOrbitCombat处理机动）
+    ENABLE_ATTACK_MANEUVER = False     # 是否启用进攻机动（直线冲向敌机）
+
     def tick(self, agent) -> str:
         if not agent.enemy_units:
             return NodeStatus.SUCCESS
@@ -406,58 +409,74 @@ class ActionAttackLogic(Action):
                         print(f"\n[单机开火] {u['name']} -> {target_name}")
 
         # Sub-step 2: Maneuver to Attack (仅对未被占用的单位有效)
-        for unit in agent.own_units:
-            if unit['name'] in agent.commanded_units:
-                continue  # 正在规避的单位不执行进攻机动
+        # 注意：当ENABLE_ATTACK_MANEUVER=False时，机动由ActionOrbitCombat处理
+        # 边界安全边距（经纬度，约10km）
+        BOUNDARY_MARGIN = 0.09
 
-            u_lon = unit.get('longitude', unit.get('X'))
-            u_lat = unit.get('latitude', unit.get('Y'))
-            if u_lon is None or u_lat is None:
-                continue
+        if self.ENABLE_ATTACK_MANEUVER:
+            for unit in agent.own_units:
+                if unit['name'] in agent.commanded_units:
+                    continue  # 正在规避的单位不执行进攻机动
 
-            # 找最近敌机（优先有人机）
-            closest = None
-            min_d = float('inf')
-            best_priority = 999
-
-            for enemy in agent.enemy_units:
-                e_lon = enemy.get('longitude', enemy.get('X'))
-                e_lat = enemy.get('latitude', enemy.get('Y'))
-                if e_lon is None or e_lat is None:
+                u_lon = unit.get('longitude', unit.get('X'))
+                u_lat = unit.get('latitude', unit.get('Y'))
+                if u_lon is None or u_lat is None:
                     continue
 
-                d = YxGeoUtils.haversine_distance(u_lon, u_lat, e_lon, e_lat)
-                enemy_type = enemy.get('platform_entity_type', '无人机')
-                priority = 0 if enemy_type == '有人机' else 1
+                # 找最近敌机（优先有人机）
+                closest = None
+                min_d = float('inf')
+                best_priority = 999
 
-                # 优先级更高 或 同优先级但更近
-                if priority < best_priority or (priority == best_priority and d < min_d):
-                    min_d = d
-                    closest = enemy
-                    best_priority = priority
+                for enemy in agent.enemy_units:
+                    e_lon = enemy.get('longitude', enemy.get('X'))
+                    e_lat = enemy.get('latitude', enemy.get('Y'))
+                    if e_lon is None or e_lat is None:
+                        continue
 
-            if closest:
-                e_lon = closest.get('longitude', closest.get('X', 0))
-                e_lat = closest.get('latitude', closest.get('Y', 0))
-                e_alt = closest.get('altitude', closest.get('Alt', 3000))
+                    d = YxGeoUtils.haversine_distance(u_lon, u_lat, e_lon, e_lat)
+                    enemy_type = enemy.get('platform_entity_type', '无人机')
+                    priority = 0 if enemy_type == '有人机' else 1
 
-                # 使用智能火控的最优攻击距离
-                is_manned = unit.get('type') == '有人机'
-                optimal_dist = SmartFireControl.MANNED_OPTIMAL_RANGE if is_manned else SmartFireControl.UAV_OPTIMAL_RANGE
+                    # 优先级更高 或 同优先级但更近
+                    if priority < best_priority or (priority == best_priority and d < min_d):
+                        min_d = d
+                        closest = enemy
+                        best_priority = priority
 
-                # 如果已经在最优距离内，不需要继续接近
-                if min_d <= optimal_dist:
-                    # 维持当前位置或轻微调整
-                    continue
+                if closest:
+                    e_lon = closest.get('longitude', closest.get('X', 0))
+                    e_lat = closest.get('latitude', closest.get('Y', 0))
+                    e_alt = closest.get('altitude', closest.get('Alt', 3000))
 
-                # 飞向攻击占位点（最优射程位置）
-                direction = YxGeoUtils.calculate_direction_to(e_lon, e_lat, u_lon, u_lat)
-                lon_off, lat_off = YxGeoUtils.km_to_lon_lat(agent.center_lat, optimal_dist / 1000, direction)
+                    # 使用智能火控的最优攻击距离
+                    is_manned = unit.get('type') == '有人机'
+                    optimal_dist = SmartFireControl.MANNED_OPTIMAL_RANGE if is_manned else SmartFireControl.UAV_OPTIMAL_RANGE
 
-                target_pt = (e_lat + lat_off, e_lon + lon_off, e_alt)
-                # 速度根据距离调整：远的快接近，近的慢接近
-                approach_speed = 550 if min_d > optimal_dist * 1.5 else 450
-                agent.add_action(decCmd.fly_to_point(unit['name'], target_pt, approach_speed), unit['name'])
+                    # 如果已经在最优距离内，不需要继续接近
+                    if min_d <= optimal_dist:
+                        # 维持当前位置或轻微调整
+                        continue
+
+                    # 飞向攻击占位点（最优射程位置）
+                    direction = YxGeoUtils.calculate_direction_to(e_lon, e_lat, u_lon, u_lat)
+                    lon_off, lat_off = YxGeoUtils.km_to_lon_lat(agent.center_lat, optimal_dist / 1000, direction)
+
+                    target_lon = e_lon + lon_off
+                    target_lat = e_lat + lat_off
+
+                    # === 边界检查：确保目标点不超出战场边界 ===
+                    bf = agent.battlefield
+                    if bf.get('min_lon') is not None:
+                        target_lon = max(bf['min_lon'] + BOUNDARY_MARGIN,
+                                        min(bf['max_lon'] - BOUNDARY_MARGIN, target_lon))
+                        target_lat = max(bf['min_lat'] + BOUNDARY_MARGIN,
+                                        min(bf['max_lat'] - BOUNDARY_MARGIN, target_lat))
+
+                    target_pt = (target_lat, target_lon, e_alt)
+                    # 速度根据距离调整：远的快接近，近的慢接近
+                    approach_speed = 550 if min_d > optimal_dist * 1.5 else 450
+                    agent.add_action(decCmd.fly_to_point(unit['name'], target_pt, approach_speed), unit['name'])
 
         return NodeStatus.SUCCESS
 
