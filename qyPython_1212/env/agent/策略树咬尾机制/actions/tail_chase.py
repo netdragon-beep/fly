@@ -138,9 +138,12 @@ class TailChaseCoordinator:
     核心原则：
     1. 优先双机协同：友机在附近时必须双机夹击
     2. 智能等待：无友机时不贸然进攻，拉开距离等待支援
-    3. 限制单挑：只有特定条件才允许单机作战
+    3. 禁止单挑：不允许单机单独追击敌机
     4. 数量保护：我方≤3架时禁止单机作战
     """
+
+    # 是否允许单独追击（设为False禁止）
+    ALLOW_SOLO_ATTACK = False
 
     def __init__(self, params: TailChaseParams = None):
         self.params = params or TailChaseParams()
@@ -189,8 +192,13 @@ class TailChaseCoordinator:
         if nearby_teammate:
             return CooperationMode.DUAL_ATTACK, nearby_teammate
 
-        # 规则3: 友机不在附近，检查是否应该单挑
-        # 修改：不再使用RETREAT，改为WAIT_SUPPORT或允许单挑
+        # 规则3: 禁止单独追击 - 无友机时不允许单机作战
+        # 修改：不再允许SOLO_ATTACK，统一返回WAIT_SUPPORT
+        if not self.ALLOW_SOLO_ATTACK:
+            # 禁止单独追击，等待支援
+            return CooperationMode.WAIT_SUPPORT, None
+
+        # 以下代码仅在 ALLOW_SOLO_ATTACK=True 时执行（当前已禁用）
         if enemy_count == 1:
             # 敌机1架 → 检查是否已有单挑
             if self._is_solo_slot_available(tail_chase_states, unit.get('name', '')):

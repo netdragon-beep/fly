@@ -124,9 +124,9 @@ class BTDemoAgent(AutoAgentBase):
             # 分支 2: 常规战斗循环 (Main Loop)
             Sequence([
                 ActionResetFrame(),                 # 步骤1: 清理
-                ActionMannedFollowConstraint(),     # 步骤2: 领航跟随约束（强制有人机保持后方25km+）
-                ActionTacticalEvasion(),            # 步骤3: 智能战术躲避（双机夹击检测+侧翼包抄）
-                ActionEvadeMissilesAdvanced(),      # 步骤4: 导弹规避（V1保守速度策略）
+                ActionTacticalEvasion(),            # 步骤2: 智能战术躲避（最高优先级！）
+                ActionEvadeMissilesAdvanced(),      # 步骤3: 导弹规避（V1保守速度策略）
+                ActionMannedFollowConstraint(),     # 步骤4: 领航跟随约束（躲避之后再约束）
                 ActionProtectMannedVision(),        # 步骤5: 无弹药无人机→保护有人机视野
                 ActionAttackLogic(),                # 步骤6: 开火逻辑
                 ActionTailChase(),                  # 步骤7: 咬尾机制（近距离缠斗，咬住敌机尾部）

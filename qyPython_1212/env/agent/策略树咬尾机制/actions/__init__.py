@@ -32,6 +32,7 @@ from .formation import (
 
 # 机动战术（单环/双环）
 from .circle_maneuver import (
+    HeadingValidator,          # 新增：航向验证器（检测危险的迎头/同向接触）
     CircleManeuverTactics,
     ActionCircleManeuver,
     ActionAdaptiveManeuver
@@ -66,9 +67,10 @@ __all__ = [
     'ActionCenterPatrol',         # 无人机外围警戒（18km）
     'ActionPatrolFormation',
     # 机动战术
+    'HeadingValidator',           # 航向验证器（检测迎头/同向危险）
     'CircleManeuverTactics',      # 机动战术计算器
     'ActionCircleManeuver',       # 单环/双环机动动作节点
-    'ActionAdaptiveManeuver',     # 自适应机动战术
+    'ActionAdaptiveManeuver',     # 自适应机动战术（含横向规避）
     # 咬尾机制
     'TailChaseState',             # 咬尾状态枚举
     'CooperationMode',            # 协同模式枚举

@@ -1,5 +1,5 @@
 """
-导弹规避动作节点 - 垂直躲避策略
+导弹规避动作节点 - 垂直躲避策略 + 导弹路径建模
 
 基于官方赛题参数设计的垂直规避策略：
 - 有人机：最大速度500m/s，高度范围2000-7000m
@@ -11,13 +11,229 @@
 - 利用导弹在垂直方向追踪能力较弱的特点
 - 高度变化范围: 2000-7000m (5000m可用空间)
 - 配合水平方向小幅度机动
+
+新增：导弹路径建模与垂直躲避系统
+- 将导弹飞行路径建模为射线（起点+方向）
+- 计算飞机到导弹路径的垂直距离
+- 如果飞机在导弹路径上，立即全速垂直远离
 """
 
 import math
+from typing import Dict, List
 from ..bt_framework import Action, NodeStatus
 from utilities.yxScriptTreeFunc import YxScriptTreeFunc as decCmd
 from utilities.yxGeoUtils import YxGeoUtils
 
+
+# ============================================================================
+# 导弹路径建模与垂直躲避系统
+# ============================================================================
+
+class MissilePathModel:
+    """
+    导弹路径建模 - 将导弹飞行路径建模为射线
+
+    用于：
+    1. 计算飞机到导弹路径的垂直距离
+    2. 判断飞机是否在导弹路径上
+    3. 计算最优垂直逃逸方向
+
+    数学原理：
+    - 导弹路径建模为射线：P(t) = M + t * D, t ≥ 0
+    - 点到直线距离：d = |MA × D| / |D|
+    """
+
+    # 安全距离阈值
+    DANGER_DISTANCE = 2000      # 2km内算在导弹路径上，需要立即躲避
+    WARNING_DISTANCE = 5000     # 5km内算接近导弹路径，需要预警
+    ESCAPE_DISTANCE_KM = 15     # 垂直逃逸飞行距离 km
+
+    def __init__(self, missile: Dict):
+        """
+        初始化导弹路径模型
+
+        Args:
+            missile: 导弹数据字典，包含 longitude, latitude, heading
+        """
+        self.origin_lon = missile.get('longitude', 0)
+        self.origin_lat = missile.get('latitude', 0)
+        self.heading = math.degrees(missile.get('heading', 0)) % 360
+        self.speed = missile.get('speed', 1200)  # 默认1200m/s
+        self.missile_id = missile.get('target_id') or missile.get('name') or id(missile)
+
+        # 计算方向向量（归一化）
+        heading_rad = math.radians(self.heading)
+        self.dir_x = math.sin(heading_rad)  # 东向分量
+        self.dir_y = math.cos(heading_rad)  # 北向分量
+
+    def get_perpendicular_distance(self, unit_lon: float, unit_lat: float) -> float:
+        """
+        计算飞机到导弹路径的垂直距离
+
+        使用向量叉积法：d = |MA × D| / |D|
+
+        Returns:
+            垂直距离（米）
+        """
+        # 将经纬度转换为相对距离（米）
+        # MA向量：从导弹位置到飞机位置
+        delta_lon = unit_lon - self.origin_lon
+        delta_lat = unit_lat - self.origin_lat
+
+        # 经纬度转米（近似）
+        lat_to_m = 111320  # 1度纬度约111km
+        lon_to_m = 111320 * math.cos(math.radians(self.origin_lat))
+
+        ma_x = delta_lon * lon_to_m  # 东向距离
+        ma_y = delta_lat * lat_to_m  # 北向距离
+
+        # 叉积 |MA × D| = |ma_x * dir_y - ma_y * dir_x|
+        cross_product = abs(ma_x * self.dir_y - ma_y * self.dir_x)
+
+        # |D| = 1（已归一化）
+        return cross_product
+
+    def get_perpendicular_escape_direction(self, unit_lon: float, unit_lat: float) -> float:
+        """
+        计算垂直于导弹路径的最优逃逸方向
+
+        选择远离导弹当前位置的垂直方向
+
+        Returns:
+            逃逸航向（度，0-360）
+        """
+        # 两个垂直方向
+        perp_left = (self.heading - 90) % 360
+        perp_right = (self.heading + 90) % 360
+
+        # 计算飞机相对导弹的位置
+        delta_lon = unit_lon - self.origin_lon
+        delta_lat = unit_lat - self.origin_lat
+
+        # 计算飞机在导弹路径哪一侧
+        # 使用叉积的符号判断
+        lat_to_m = 111320
+        lon_to_m = 111320 * math.cos(math.radians(self.origin_lat))
+
+        ma_x = delta_lon * lon_to_m
+        ma_y = delta_lat * lat_to_m
+
+        cross = ma_x * self.dir_y - ma_y * self.dir_x
+
+        # 正值表示在右侧，负值表示在左侧
+        # 选择继续远离的方向
+        if cross >= 0:
+            return perp_right  # 飞机在右侧，继续向右逃
+        else:
+            return perp_left   # 飞机在左侧，继续向左逃
+
+    def is_aircraft_on_path(self, unit_lon: float, unit_lat: float) -> bool:
+        """判断飞机是否在导弹路径上（危险区域内）"""
+        return self.get_perpendicular_distance(unit_lon, unit_lat) < self.DANGER_DISTANCE
+
+    def is_aircraft_approaching_path(self, unit_lon: float, unit_lat: float,
+                                      unit_heading: float) -> bool:
+        """
+        判断飞机航向是否会接近导弹路径
+
+        计算飞机当前航向与导弹路径的交点，
+        如果会在未来某时刻进入危险区域，返回True
+        """
+        perp_dist = self.get_perpendicular_distance(unit_lon, unit_lat)
+
+        if perp_dist > self.WARNING_DISTANCE:
+            return False  # 已经足够远，不用担心
+
+        # 计算飞机航向与导弹路径的夹角
+        angle_diff = abs((unit_heading - self.heading + 180) % 360 - 180)
+
+        # 如果飞机航向与导弹路径近似平行或相向，且在警告距离内
+        if angle_diff < 30 or angle_diff > 150:
+            # 检查是否在向导弹路径靠近
+            escape_dir = self.get_perpendicular_escape_direction(unit_lon, unit_lat)
+            heading_to_escape_diff = abs((unit_heading - escape_dir + 180) % 360 - 180)
+
+            # 如果航向偏离逃逸方向超过90度，说明在靠近
+            if heading_to_escape_diff > 90:
+                return True
+
+        return False
+
+
+class MissilePathManager:
+    """
+    导弹路径管理器 - 管理所有活跃导弹的路径模型
+
+    功能：
+    1. 维护所有导弹的路径模型
+    2. 检查飞机是否在任何导弹路径上
+    3. 计算最优躲避方向
+    """
+
+    def __init__(self):
+        self.missile_paths = {}  # missile_id -> MissilePathModel
+
+    def update_missiles(self, missiles: List[Dict]):
+        """更新导弹路径模型"""
+        current_ids = set()
+
+        for missile in missiles:
+            m_id = missile.get('target_id') or missile.get('name') or id(missile)
+            current_ids.add(m_id)
+
+            # 创建或更新路径模型
+            self.missile_paths[m_id] = MissilePathModel(missile)
+
+        # 移除已消失的导弹
+        expired_ids = set(self.missile_paths.keys()) - current_ids
+        for m_id in expired_ids:
+            del self.missile_paths[m_id]
+
+    def check_unit_danger(self, unit: Dict) -> Dict:
+        """
+        检查飞机是否在任何导弹路径上
+
+        Returns:
+            {
+                'in_danger': bool,          # 是否在危险区域
+                'approaching': bool,        # 是否在接近危险区域
+                'closest_distance': float,  # 到最近导弹路径的距离
+                'escape_direction': float,  # 推荐逃逸方向
+                'threatening_missiles': []  # 威胁导弹列表
+            }
+        """
+        u_lon = unit.get('longitude', 0)
+        u_lat = unit.get('latitude', 0)
+        u_heading = math.degrees(unit.get('heading', 0)) % 360
+
+        result = {
+            'in_danger': False,
+            'approaching': False,
+            'closest_distance': float('inf'),
+            'escape_direction': None,
+            'threatening_missiles': []
+        }
+
+        for m_id, path in self.missile_paths.items():
+            perp_dist = path.get_perpendicular_distance(u_lon, u_lat)
+
+            if perp_dist < result['closest_distance']:
+                result['closest_distance'] = perp_dist
+                result['escape_direction'] = path.get_perpendicular_escape_direction(u_lon, u_lat)
+
+            if path.is_aircraft_on_path(u_lon, u_lat):
+                result['in_danger'] = True
+                result['threatening_missiles'].append(m_id)
+            elif path.is_aircraft_approaching_path(u_lon, u_lat, u_heading):
+                result['approaching'] = True
+                result['threatening_missiles'].append(m_id)
+
+        return result
+
+
+# ============================================================================
+# 原有躲避动作节点
+# ============================================================================
 
 class ActionEvadeMissiles(Action):
     """
@@ -445,19 +661,23 @@ class ActionEvadeMissilesAdvanced(ActionEvadeMissiles):
 
 class ActionTacticalEvasion(ActionEvadeMissiles):
     """
-    战术垂直躲避 - 多导弹综合规避策略
+    战术躲避 - 基于导弹路径建模的垂直躲避
 
-    核心功能：
+    核心功能（新增）：
+    1. 使用 MissilePathModel 将导弹路径建模为射线
+    2. 计算飞机到导弹路径的垂直距离
+    3. 如果飞机在导弹路径上（<2km），立即全速垂直逃逸
+    4. 如果飞机正在接近导弹路径（<5km），调整航向远离
+
+    原有功能：
     1. 检测1-4发来袭导弹
     2. 计算所有导弹的综合威胁方向和高度
     3. 计算最优垂直躲避角度，尽可能实现垂直躲避
     4. 配合小幅度水平机动增加规避效果
-
-    垂直躲避优势：
-    - 导弹在垂直方向的机动性相对较弱
-    - 快速改变高度可以增加导弹追踪难度
-    - 利用高度边界（2000m/7000m）进行极限规避
     """
+
+    # ========== 路径管理器（类级别单例）==========
+    path_manager = MissilePathManager()
 
     # ========== 多导弹检测参数 ==========
     MULTI_MISSILE_DETECTION_RANGE = 50000   # 检测范围 (50km)
@@ -481,30 +701,136 @@ class ActionTacticalEvasion(ActionEvadeMissiles):
     # 威胁权重：距离越近权重越大
     DISTANCE_WEIGHT_FACTOR = 1.5            # 距离权重因子
 
+    # ========== 路径躲避参数 ==========
+    PATH_ESCAPE_DISTANCE_KM = 15            # 垂直逃逸飞行距离 km
+    PATH_ADJUST_DISTANCE_KM = 8             # 航向调整飞行距离 km
+
     DEBUG_TACTICAL = False
 
     def tick(self, agent) -> str:
         """
-        执行多导弹综合垂直躲避
+        执行导弹躲避（优先使用路径建模）
 
         优先级：
-        1. 检测1-4发来袭导弹
-        2. 计算综合躲避方向
-        3. 执行垂直躲避机动
-        4. 无导弹威胁时执行常规逻辑
+        1. 更新导弹路径模型
+        2. 检查是否在导弹路径上 -> 全速垂直逃逸
+        3. 检查是否正在接近导弹路径 -> 调整航向
+        4. 否则使用原有多导弹威胁分析
         """
         # 无导弹则直接返回
         if not agent.enemy_missiles:
             return NodeStatus.SUCCESS
 
-        # 对每个己方单位进行多导弹威胁分析和规避
-        for unit in agent.own_units:
-            missile_threat = self._detect_multi_missile_threat(agent, unit)
+        # 更新导弹路径模型
+        self.path_manager.update_missiles(agent.enemy_missiles)
 
-            if missile_threat['has_threat']:
-                self._execute_multi_missile_vertical_evasion(agent, unit, missile_threat)
+        # 对每个己方单位检查危险
+        for unit in agent.own_units:
+            # 首先使用路径建模检查
+            danger_info = self.path_manager.check_unit_danger(unit)
+
+            if danger_info['in_danger']:
+                # 在导弹路径上！立即全速垂直逃逸（最高优先级）
+                self._execute_perpendicular_escape(agent, unit, danger_info)
+            elif danger_info['approaching']:
+                # 正在接近导弹路径，调整航向
+                self._execute_heading_adjustment(agent, unit, danger_info)
+            else:
+                # 安全，使用原有多导弹威胁分析
+                missile_threat = self._detect_multi_missile_threat(agent, unit)
+                if missile_threat['has_threat']:
+                    self._execute_multi_missile_vertical_evasion(agent, unit, missile_threat)
 
         return NodeStatus.SUCCESS
+
+    def _execute_perpendicular_escape(self, agent, unit: Dict, danger_info: Dict):
+        """
+        执行垂直逃逸 - 全速垂直于导弹路径飞行
+
+        当飞机在导弹路径上（距离<2km）时触发
+        立即以最大速度向垂直于导弹路径的方向飞行15km
+        """
+        unit_name = unit['name']
+        u_lon = unit.get('longitude', 0)
+        u_lat = unit.get('latitude', 0)
+        u_alt = unit.get('altitude', self.INITIAL_ALTITUDE)
+        is_manned = unit.get('type') == '有人机'
+
+        # 获取逃逸方向
+        escape_heading = danger_info['escape_direction']
+        if escape_heading is None:
+            return
+
+        # 计算目标点（垂直方向飞行15km）
+        escape_dist_km = self.PATH_ESCAPE_DISTANCE_KM
+        lon_off, lat_off = YxGeoUtils.km_to_lon_lat(u_lat, escape_dist_km, escape_heading)
+        target_lon = u_lon + lon_off
+        target_lat = u_lat + lat_off
+
+        # 边界约束
+        bf = agent.battlefield
+        if bf.get('min_lon') is not None:
+            margin = self.BOUNDARY_MARGIN
+            target_lon = max(bf['min_lon'] + margin, min(bf['max_lon'] - margin, target_lon))
+            target_lat = max(bf['min_lat'] + margin, min(bf['max_lat'] - margin, target_lat))
+
+        # 全速飞行
+        max_speed = self.TACTICAL_SPEED_MANNED if is_manned else self.TACTICAL_SPEED_UAV
+
+        agent.add_action(
+            decCmd.fly_to_point(unit_name, (target_lat, target_lon, u_alt), max_speed),
+            unit_name
+        )
+
+        if self.DEBUG_TACTICAL or self.DEBUG_ENABLED:
+            print(f"[垂直逃逸] {unit_name}")
+            print(f"  到路径距离: {danger_info['closest_distance']:.0f}m")
+            print(f"  逃逸方向: {escape_heading:.1f}°")
+            print(f"  威胁导弹: {danger_info['threatening_missiles']}")
+
+    def _execute_heading_adjustment(self, agent, unit: Dict, danger_info: Dict):
+        """
+        执行航向调整 - 飞机航向正在接近导弹路径时调整
+
+        当飞机正在接近导弹路径（距离2-5km）时触发
+        调整航向向远离导弹路径的方向飞行8km
+        """
+        unit_name = unit['name']
+        u_lon = unit.get('longitude', 0)
+        u_lat = unit.get('latitude', 0)
+        u_alt = unit.get('altitude', self.INITIAL_ALTITUDE)
+        is_manned = unit.get('type') == '有人机'
+
+        # 调整航向远离导弹路径
+        safe_heading = danger_info['escape_direction']
+        if safe_heading is None:
+            return
+
+        # 计算目标点（调整航向方向飞行8km）
+        adjust_dist_km = self.PATH_ADJUST_DISTANCE_KM
+        lon_off, lat_off = YxGeoUtils.km_to_lon_lat(u_lat, adjust_dist_km, safe_heading)
+        target_lon = u_lon + lon_off
+        target_lat = u_lat + lat_off
+
+        # 边界约束
+        bf = agent.battlefield
+        if bf.get('min_lon') is not None:
+            margin = self.BOUNDARY_MARGIN
+            target_lon = max(bf['min_lon'] + margin, min(bf['max_lon'] - margin, target_lon))
+            target_lat = max(bf['min_lat'] + margin, min(bf['max_lat'] - margin, target_lat))
+
+        # 较高速度调整
+        speed = 450 if is_manned else 320
+
+        agent.add_action(
+            decCmd.fly_to_point(unit_name, (target_lat, target_lon, u_alt), speed),
+            unit_name
+        )
+
+        if self.DEBUG_TACTICAL or self.DEBUG_ENABLED:
+            print(f"[航向调整] {unit_name}")
+            print(f"  到路径距离: {danger_info['closest_distance']:.0f}m")
+            print(f"  调整航向: {safe_heading:.1f}°")
 
     def _detect_multi_missile_threat(self, agent, unit):
         """

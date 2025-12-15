@@ -4,6 +4,7 @@
 包含智能火控和Shoot-Look-Shoot策略
 """
 
+from typing import Dict
 from ..bt_framework import Action, NodeStatus
 from ..fire_control import SmartFireControl
 from utilities.yxScriptTreeFunc import YxScriptTreeFunc as decCmd
@@ -414,6 +415,8 @@ class ActionAttackLogic(Action):
                         print(f"\n[单机开火] {u['name']} -> {target_name}")
 
         # Sub-step 2: Maneuver to Attack (仅对未被占用的单位有效)
+        # 使用滞后追踪（Lag Pursuit）策略，飞向敌机后方而非当前位置
+        # 这样可以自然进入尾追位置，避免迎头对峙
         for unit in agent.own_units:
             if unit['name'] in agent.commanded_units:
                 continue  # 正在规避的单位不执行进攻机动
@@ -458,14 +461,17 @@ class ActionAttackLogic(Action):
                     # 维持当前位置或轻微调整
                     continue
 
-                # 飞向攻击占位点（最优射程位置）
-                direction = YxGeoUtils.calculate_direction_to(e_lon, e_lat, u_lon, u_lat)
-                lon_off, lat_off = YxGeoUtils.km_to_lon_lat(agent.center_lat, optimal_dist / 1000, direction)
+                # 【滞后追踪（Lag Pursuit）】
+                # 不再直接飞向敌机当前位置，而是飞向敌机后方
+                # 这样可以自然进入尾追位置，避免迎头对峙
+                lag_point = self._calculate_lag_pursuit_point(unit, closest, optimal_dist)
 
-                target_pt = (e_lat + lat_off, e_lon + lon_off, e_alt)
                 # 速度根据距离调整：远的快接近，近的慢接近
-                approach_speed = 550 if min_d > optimal_dist * 1.5 else 450
-                agent.add_action(decCmd.fly_to_point(unit['name'], target_pt, approach_speed), unit['name'])
+                approach_speed = 500 if is_manned else 340
+                if min_d > optimal_dist * 1.5:
+                    approach_speed = 550 if is_manned else 360
+
+                agent.add_action(decCmd.fly_to_point(unit['name'], lag_point, approach_speed), unit['name'])
 
         return NodeStatus.SUCCESS
 
@@ -555,6 +561,63 @@ class ActionAttackLogic(Action):
             print(f"  在NEZ内: {in_nez_misses}/{len(misses)} ({100*in_nez_misses/len(misses):.1f}%)")
 
         print(f"{'='*60}\n")
+
+    # 滞后追踪（Lag Pursuit）参数
+    LAG_PURSUIT_DISTANCE_KM = 10        # 滞后追踪距离 10km（敌机后方）
+    LAG_PURSUIT_MIN_ASPECT = 60         # 最小姿态角才使用滞后追踪（避免已在尾追位置时还绕后）
+
+    def _calculate_lag_pursuit_point(self, unit: Dict, enemy: Dict, optimal_dist: float) -> tuple:
+        """
+        计算滞后追踪点（Lag Pursuit Point）
+
+        滞后追踪是BFM（Basic Fighter Maneuvers）中的核心概念：
+        - 不直接飞向敌机当前位置
+        - 而是飞向敌机后方（敌机航向的反方向）
+        - 这样可以自然进入尾追位置，避免迎头对峙
+
+        Args:
+            unit: 己方单位
+            enemy: 敌方单位
+            optimal_dist: 最优攻击距离
+
+        Returns:
+            (target_lat, target_lon, target_alt)
+        """
+        import math
+
+        u_lon = unit.get('longitude', 0)
+        u_lat = unit.get('latitude', 0)
+
+        e_lon = enemy.get('longitude', 0)
+        e_lat = enemy.get('latitude', 0)
+        e_alt = enemy.get('altitude', 3000)
+        e_heading = math.degrees(enemy.get('heading', 0)) % 360
+
+        # 计算当前姿态角（判断是否已经在尾追位置）
+        bearing_enemy_to_me = YxGeoUtils.calculate_bearing(e_lon, e_lat, u_lon, u_lat)
+        aspect_angle = abs(bearing_enemy_to_me - e_heading)
+        if aspect_angle > 180:
+            aspect_angle = 360 - aspect_angle
+
+        # 如果已经在尾追位置（姿态角 > 120°），直接飞向最优距离点
+        if aspect_angle > 120:
+            # 已在尾追位置，飞向最优攻击距离
+            direction = YxGeoUtils.calculate_bearing(u_lon, u_lat, e_lon, e_lat)
+            dist_km = optimal_dist / 1000
+            lon_off, lat_off = YxGeoUtils.km_to_lon_lat(e_lat, dist_km, (direction + 180) % 360)
+            return (e_lat + lat_off, e_lon + lon_off, e_alt)
+
+        # 计算敌机后方方向
+        tail_direction = (e_heading + 180) % 360
+
+        # 计算滞后点（敌机后方10km）
+        lag_dist_km = self.LAG_PURSUIT_DISTANCE_KM
+        lon_off, lat_off = YxGeoUtils.km_to_lon_lat(e_lat, lag_dist_km, tail_direction)
+
+        lag_lon = e_lon + lon_off
+        lag_lat = e_lat + lat_off
+
+        return (lag_lat, lag_lon, e_alt)
 
     def _has_ammo(self, unit) -> bool:
         """检查单位是否有弹药"""
