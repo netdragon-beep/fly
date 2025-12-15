@@ -24,7 +24,8 @@ from .actions import (
     ActionAttackLogic,
     ActionSearchFormation,
     ActionCenterPatrol,
-    ActionPatrolFormation
+    ActionPatrolFormation,
+    ActionAdaptiveManeuver        # 新增：单环/双环机动战术
 )
 
 
@@ -42,6 +43,13 @@ class BTDemoAgent(AutoAgentBase):
     - 如果被夹击，先后撤拉开距离
     - 然后寻找侧翼有利角度（敌机打不到我，但我能打到敌机）
 
+    【新增】单环机动战术：
+    单环机动是一种围绕敌机飞行的战术移动模式，配合现有攻击和躲避机制：
+    - 绕着敌机飞圆圈，保持10km左右距离
+    - 面向敌机时（0±45°）→ 进入攻击窗口，现有攻击逻辑判断开火
+    - 侧向敌机时（90°/270°）→ 垂直速度最大，配合现有躲避
+    - 背向敌机时（180°）→ 拉开距离脱离
+
     行为树结构：
     1. 优先检查是否需要开局部署
     2. 进入战斗循环：
@@ -49,10 +57,11 @@ class BTDemoAgent(AutoAgentBase):
        b. 智能战术躲避（双机夹击检测+侧翼包抄）
        c. 导弹规避（V1保守速度策略）
        d. 无弹药无人机保护有人机
-       e. 攻击逻辑
-       f. 搜索阵型
-       g. 中心巡逻
-       h. 防御巡逻
+       e. 攻击逻辑（有攻击机会时开火）
+       f. 单环机动（发现敌机后绕飞，配合攻击和躲避）
+       g. 搜索阵型（无敌机时）
+       h. 中心巡逻
+       i. 防御巡逻
     """
 
     def __init__(self, side, name):
@@ -97,9 +106,10 @@ class BTDemoAgent(AutoAgentBase):
                 ActionEvadeMissilesAdvanced(),      # 步骤3: 导弹规避（V1保守速度策略）
                 ActionProtectMannedVision(),        # 步骤4: 无弹药无人机→保护有人机视野
                 ActionAttackLogic(),                # 步骤5: 开火逻辑
-                ActionSearchFormation(),            # 步骤6: 无敌机→分散搜索推进
-                ActionCenterPatrol(),               # 步骤7: 到达中心无敌机→盘旋
-                ActionPatrolFormation()             # 步骤8: 兜底
+                ActionAdaptiveManeuver(),           # 步骤6: 单环机动（绕敌飞行，配合攻击和躲避）
+                ActionSearchFormation(),            # 步骤7: 无敌机→分散搜索推进
+                ActionCenterPatrol(),               # 步骤8: 到达中心无敌机→盘旋
+                ActionPatrolFormation()             # 步骤9: 兜底
             ])
         ])
 
