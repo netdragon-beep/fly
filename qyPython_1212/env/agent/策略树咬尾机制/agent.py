@@ -1,0 +1,262 @@
+"""
+主智能体类 (BTDemoAgent) - V1版本（保守速度策略）
+
+基于行为树的战斗AI智能体
+
+与主版本的区别：使用V1躲避机制（根据威胁等级使用不同速度80%-100%）
+"""
+
+import math
+import random
+from typing import Dict
+
+from env.agent.agent_base import AutoAgentBase
+from utilities.yxGeoUtils import YxGeoUtils
+
+from .bt_framework import Sequence, Selector
+from .actions import (
+    ActionResetFrame,
+    ActionMannedFollowConstraint,  # 新增：领航跟随约束（强制有人机保持后方）
+    ConditionCheckInitialDeployment,
+    ActionExecuteDeployment,
+    ActionEvadeMissilesAdvanced,  # 使用V1版本躲避机制
+    ActionTacticalEvasion,        # 新增：智能战术躲避（双机夹击检测+侧翼包抄）
+    ActionProtectMannedVision,
+    ActionAttackLogic,
+    ActionSearchFormation,
+    ActionCenterPriority,         # 新增：有人机中心优先
+    ActionCenterPatrol,           # 修改：无人机外围警戒
+    ActionPatrolFormation,
+    ActionAdaptiveManeuver,       # 单环/双环机动战术
+    ActionTailChase               # 咬尾机制
+)
+
+
+class BTDemoAgent(AutoAgentBase):
+    """
+    基于行为树的战斗AI智能体 - V1版本（保守速度策略）
+
+    使用V1躲避机制：根据威胁等级使用不同速度
+    - 正常威胁：80-83%最大速度
+    - 危险威胁：90-92%最大速度
+    - 紧急/致命威胁：100%最大速度
+
+    【智能战术躲避】：
+    - 检测是否被两架敌机同时夹击
+    - 如果被夹击，先后撤拉开距离
+    - 然后寻找侧翼有利角度（敌机打不到我，但我能打到敌机）
+
+    【单环机动战术】：
+    单环机动是一种围绕敌机飞行的战术移动模式，配合现有攻击和躲避机制：
+    - 绕着敌机飞圆圈，保持10km左右距离
+    - 面向敌机时（0±45°）→ 进入攻击窗口，现有攻击逻辑判断开火
+    - 侧向敌机时（90°/270°）→ 垂直速度最大，配合现有躲避
+    - 背向敌机时（180°）→ 拉开距离脱离
+
+    【咬尾机制】：
+    近距离缠斗战术，通过绕飞进入敌机后半球（尾追位置）：
+    - 状态机：SEARCH → APPROACH → CHASE → ATTACK → DISENGAGE
+    - 协同模式：双机夹击优先，等待支援而非撤退
+    - 有人机特殊处理：只攻击单个无弹药敌机，否则不参与咬尾
+    - 动态半径调整：根据姿态角和距离缩小绕飞半径
+    - 利用敌机雷达盲区（后方120°）和尾追NEZ（6-8km）
+
+    【有人机中心优先】：
+    - 有人机优先返回/占领中心区域（5km内）
+    - 只有安全时才攻击（单个无弹药敌机）
+    - 危险时远离敌机，确保存活
+
+    【无人机外围警戒】：
+    - 无人机在中心外围（18km）形成警戒圈
+    - 为有人机提供外层保护和预警
+
+    行为树结构：
+    1. 优先检查是否需要开局部署
+    2. 进入战斗循环：
+       a. 重置帧数据
+       b. 智能战术躲避（双机夹击检测+侧翼包抄）
+       c. 导弹规避（V1保守速度策略）
+       d. 无弹药无人机保护有人机
+       e. 攻击逻辑（有攻击机会时开火）
+       f. 咬尾机制（近距离缠斗，咬住敌机尾部）
+       g. 有人机中心优先（占领中心区域积累时间）
+       h. 单环机动（发现敌机后绕飞，配合攻击和躲避）
+       i. 搜索阵型（无敌机时）
+       j. 无人机外围警戒
+       k. 防御巡逻（兜底）
+    """
+
+    def __init__(self, side, name):
+        super().__init__(side, name)
+
+        # # === 调试：打印战场信息 ===
+        # print(f"[BTDemoAgent] 初始化 side={side}, name={name}")
+        # print(f"[BTDemoAgent] 战场边界: {self.battlefield}")
+        # if self.battlefield.get('min_lon') is not None:
+        #     calc_center_lat = (self.battlefield['min_lat'] + self.battlefield['max_lat']) / 2
+        #     calc_center_lon = (self.battlefield['min_lon'] + self.battlefield['max_lon']) / 2
+        #     print(f"[BTDemoAgent] 计算中心点: lat={calc_center_lat}, lon={calc_center_lon}")
+
+        # --- 状态变量 ---
+        self.initial_deployment_complete = False
+        self.frame_count = 0
+        self.own_units = []
+        self.enemy_units = []
+        self.enemy_missiles = []
+
+        # --- 行为树上下文 (Blackboard) ---
+        self.current_actions = []      # 本帧生成的指令列表
+        self.commanded_units = set()   # 本帧已分配移动任务的单位名称
+
+        # --- 战场辅助信息 ---
+        self.center_lat = (self.battlefield['min_lat'] + self.battlefield['max_lat']) / 2
+        self.center_lon = (self.battlefield['min_lon'] + self.battlefield['max_lon']) / 2
+        self.defense_angle_offset = random.randint(0, 360)
+
+        # --- 构建行为树 ---
+        self.bt_root = Selector([
+            # 分支 1: 开局部署
+            Sequence([
+                ConditionCheckInitialDeployment(),
+                ActionExecuteDeployment()
+            ]),
+
+            # 分支 2: 常规战斗循环 (Main Loop)
+            Sequence([
+                ActionResetFrame(),                 # 步骤1: 清理
+                ActionMannedFollowConstraint(),     # 步骤2: 领航跟随约束（强制有人机保持后方25km+）
+                ActionTacticalEvasion(),            # 步骤3: 智能战术躲避（双机夹击检测+侧翼包抄）
+                ActionEvadeMissilesAdvanced(),      # 步骤4: 导弹规避（V1保守速度策略）
+                ActionProtectMannedVision(),        # 步骤5: 无弹药无人机→保护有人机视野
+                ActionAttackLogic(),                # 步骤6: 开火逻辑
+                ActionTailChase(),                  # 步骤7: 咬尾机制（近距离缠斗，咬住敌机尾部）
+                ActionCenterPriority(),             # 步骤8: 有人机中心优先（占领中心区域）
+                ActionAdaptiveManeuver(),           # 步骤9: 单环机动（绕敌飞行，配合攻击和躲避）
+                ActionSearchFormation(),            # 步骤10: 无敌机→分散搜索推进
+                ActionCenterPatrol(),               # 步骤11: 无人机外围警戒
+                ActionPatrolFormation()             # 步骤12: 兜底
+            ])
+        ])
+
+    def update_decision(self, new_observation: Dict):
+        """主入口函数"""
+        self.observation = new_observation
+        self.frame_count += 1
+
+        # 1. 解析数据
+        self._parse_observation(new_observation)
+
+        if not self.own_units:
+            return []
+
+        # 2. 运行行为树
+        self.bt_root.tick(self)
+
+        # 3. 返回行为树生成的指令列表
+        return self.current_actions
+
+    # --- 辅助方法 (给节点调用) ---
+
+    def add_action(self, cmd_dict, unit_name_occupy=None):
+        """添加指令到列表，并可选地标记单位为'已占用'"""
+        self.current_actions.append(cmd_dict)
+        if unit_name_occupy:
+            self.commanded_units.add(unit_name_occupy)
+
+    def _parse_observation(self, obs):
+        """解析观测数据"""
+        assert obs.get('side') == self.side, f"side must be {self.side}, got {obs.get('side')}"
+
+        self.own_units = obs.get('platform_list', [])
+        self.enemy_units = []
+        self.enemy_missiles = []
+        for track in obs.get('track_list', []):
+            if track.get('platform_entity_side') != self.side:
+                if track.get('platform_entity_type') == '导弹':
+                    self.enemy_missiles.append(track)
+                else:
+                    self.enemy_units.append(track)
+
+    def try_fire_weapon(self, unit):
+        """尝试扣除武器库存，成功返回True"""
+        for weapon in unit.get('weapons', []):
+            if weapon.get('quantity', 0) > 0:
+                weapon['quantity'] -= 1
+                return True
+        return False
+
+    def predict_threatened_units(self, missile):
+        """预测威胁"""
+        threatened = []
+        m_lon, m_lat = missile['longitude'], missile['latitude']
+        m_heading = (math.degrees(missile.get('heading', 0)) + 360) % 360
+
+        for unit in self.own_units:
+            dist = YxGeoUtils.haversine_distance(unit['longitude'], unit['latitude'], m_lon, m_lat)
+            bearing = YxGeoUtils.calculate_bearing(m_lon, m_lat, unit['longitude'], unit['latitude'])
+            angle_diff = abs((bearing - m_heading + 180) % 360 - 180)  # 归一化角度差
+
+            if dist < 10000 and angle_diff < 15:
+                threatened.append(unit)
+        return threatened
+
+    def calculate_evade_direction(self, unit, missile):
+        """
+        计算规避方向：垂直于导弹飞行方向（左或右）
+
+        策略：
+        - 获取导弹航向
+        - 计算垂直于导弹航向的左右两个方向
+        - 选择离战场边界更远的方向（避免飞出边界）
+        """
+        # 导弹航向（弧度转角度）
+        missile_heading = math.degrees(missile.get('heading', 0)) % 360
+
+        # 垂直于导弹航向的两个方向
+        evade_left = (missile_heading - 90) % 360   # 导弹左侧
+        evade_right = (missile_heading + 90) % 360  # 导弹右侧
+
+        unit_lat = unit.get('latitude', self.center_lat)
+        unit_lon = unit.get('longitude', self.center_lon)
+
+        # 计算两个规避方向的目标点
+        left_lon_off, left_lat_off = YxGeoUtils.km_to_lon_lat(self.center_lat, 5, evade_left)
+        right_lon_off, right_lat_off = YxGeoUtils.km_to_lon_lat(self.center_lat, 5, evade_right)
+
+        left_target_lat = unit_lat + left_lat_off
+        left_target_lon = unit_lon + left_lon_off
+        right_target_lat = unit_lat + right_lat_off
+        right_target_lon = unit_lon + right_lon_off
+
+        # 检查哪个方向更安全（离边界更远）
+        left_safe = (self.battlefield['min_lat'] < left_target_lat < self.battlefield['max_lat'] and
+                     self.battlefield['min_lon'] < left_target_lon < self.battlefield['max_lon'])
+        right_safe = (self.battlefield['min_lat'] < right_target_lat < self.battlefield['max_lat'] and
+                      self.battlefield['min_lon'] < right_target_lon < self.battlefield['max_lon'])
+
+        if left_safe and not right_safe:
+            return evade_left
+        elif right_safe and not left_safe:
+            return evade_right
+        else:
+            # 两边都安全或都不安全，选择离战场中心更近的方向
+            left_dist_to_center = abs(left_target_lat - self.center_lat) + abs(left_target_lon - self.center_lon)
+            right_dist_to_center = abs(right_target_lat - self.center_lat) + abs(right_target_lon - self.center_lon)
+
+            return evade_left if left_dist_to_center < right_dist_to_center else evade_right
+
+    def save_battle_data(self):
+        """
+        保存战斗数据（击杀/脱靶记录）
+
+        在战斗结束后调用此方法保存收集的数据
+        用于后续分析和拟合致死区间模型
+        """
+        ActionAttackLogic.save_kill_data(self)
+
+    def print_battle_summary(self):
+        """打印战斗数据统计摘要"""
+        if hasattr(self, 'kill_data_records') and self.kill_data_records:
+            ActionAttackLogic.print_kill_data_summary(self.kill_data_records)
+        else:
+            print("[战斗摘要] 没有收集到导弹数据")
