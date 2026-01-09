@@ -173,6 +173,12 @@ def auto_engage_main(red_agent, blue_agent):
             except Exception as e:
                 print(f'执行auto_engage_main时报错：{e}')
         print(f"推演结束:{done[0]} 红方胜利:{done[1]} 蓝方胜利:{done[2]}")
+
+        # === 保存战斗数据（击杀/脱靶记录） ===
+        if hasattr(env.red_agent, 'save_battle_data'):
+            print("\n[数据收集] 正在保存红方战斗数据...")
+            env.red_agent.save_battle_data()
+
         env.funTool.sim_control('edit')
         if env.run_times <= 0:
             if config.is_print_debug:

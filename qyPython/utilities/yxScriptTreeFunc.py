@@ -54,6 +54,54 @@ class YxScriptTreeFunc:
     def send_str_ws(self, json_str):
         return self.s_ws.send(json_str)
 
+    def set_battlefield_boundaries(self, min_lon: float, max_lon: float,
+                                   min_lat: float, max_lat: float):
+        """
+        通过调用“设置边界值”函数同步真实战场边界，避免0.01默认值导致越界误判。
+        """
+        if self.s_ws is None:
+            print("未连接推演服务器，无法设置战场边界")
+            return False
+
+        try:
+            lon1 = float(min_lon)
+            lon2 = float(max_lon)
+            lat1 = float(min_lat)
+            lat2 = float(max_lat)
+        except (TypeError, ValueError):
+            print("战场边界数据无效，跳过设置")
+            return False
+
+        data = {
+            "fun": "yxCallFun",
+            "data": {
+                "funId": "00963746FBF4AE5E6CDD169C458AEBDD",
+                "returnType": "none",
+                "argNames": [
+                    "@fun:lon1",
+                    "@fun:lon2",
+                    "@fun:@addr:max_lon",
+                    "@fun:@addr:min_lon",
+                    "@fun:lat1",
+                    "@fun:lat2",
+                    "@fun:@addr:max_lat",
+                    "@fun:@addr:min_lat"
+                ],
+                "argValues": [
+                    lon1,
+                    lon2,
+                    "@variable:max_lon&globle",
+                    "@variable:min_lon&globle",
+                    lat1,
+                    lat2,
+                    "@variable:max_lat&globle",
+                    "@variable:min_lat&globle"
+                ]
+            },
+            "autoRelay": False
+        }
+        return self.send_msg_ws(data)
+
 
     @staticmethod
     def go_to_speed(self_platform: str, speed: float):

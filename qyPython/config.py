@@ -29,8 +29,8 @@ AUTO_ENGAGE_CONFIG = Config(
     battle_mode=ENGAGE_MODE_AUTO,
     is_single_instance=True,
     is_async_step=True,
-    generate_task_num=2,
-    run_times=3,
+    generate_task_num=5,
+    run_times=5,
     frame_num=5,
     run_delta_time=5
 )

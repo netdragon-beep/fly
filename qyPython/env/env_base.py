@@ -59,6 +59,23 @@ class EnvBase:
 
     def set_batllefield(self, battlefield):
         self.battlefield = battlefield
+        self._sync_battlefield_bounds()
+
+    def _sync_battlefield_bounds(self):
+        """把战区边界同步到仿真行为树，避免默认0.01导致误判。"""
+        fun_tool = getattr(self, 'funTool', None)
+        if not fun_tool or not hasattr(fun_tool, 'set_battlefield_boundaries'):
+            return
+        bounds = getattr(self, 'battlefield', None)
+        if not bounds:
+            return
+        min_lon = bounds.get('min_lon')
+        max_lon = bounds.get('max_lon')
+        min_lat = bounds.get('min_lat')
+        max_lat = bounds.get('max_lat')
+        if None in (min_lon, max_lon, min_lat, max_lat):
+            return
+        fun_tool.set_battlefield_boundaries(min_lon, max_lon, min_lat, max_lat)
 
     def on_scenario_error(self, ws, error):
         print(error)
